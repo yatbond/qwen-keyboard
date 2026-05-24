@@ -95,7 +95,7 @@ class QwenVoiceInputMethodService : InputMethodService() {
     private var suggestionModeEnabled = true
     private var voiceCleanupEnabled = true
     private var voiceAutoPunctuation = false
-    private var voicePunctuationMode = "off" // off, rules, pc_ai, cloud_ai
+    private var voicePunctuationMode = "off" // off, rules, cloud_ai
     private var voiceAiTextCorrectionEnabled = false
     private var openRouterApiKey = ""
     private var openRouterModel = "qwen/qwen3-next-80b-a3b-instruct:free"
@@ -258,12 +258,18 @@ class QwenVoiceInputMethodService : InputMethodService() {
         voiceCleanupEnabled = p.getBoolean("voice_cleanup", true)
         voiceAutoPunctuation = p.getBoolean("voice_auto_punctuation", false)
         voicePunctuationMode = p.getString("voice_punctuation_mode", if (voiceAutoPunctuation) "rules" else "off") ?: "off"
-        if (voicePunctuationMode !in listOf("off", "rules", "pc_ai", "cloud_ai")) voicePunctuationMode = if (voiceAutoPunctuation) "rules" else "off"
+        if (voicePunctuationMode == "pc_ai") voicePunctuationMode = "cloud_ai"
+        if (voicePunctuationMode !in listOf("off", "rules", "cloud_ai")) voicePunctuationMode = if (voiceAutoPunctuation) "rules" else "off"
         voiceAutoPunctuation = voicePunctuationMode != "off"
         voiceAiTextCorrectionEnabled = p.getBoolean("voice_ai_text_correction", false)
         openRouterApiKey = p.getString("openrouter_api_key", "") ?: ""
         openRouterModel = p.getString("openrouter_model", "qwen/qwen3-next-80b-a3b-instruct:free") ?: "qwen/qwen3-next-80b-a3b-instruct:free"
-        if (openRouterModel.isBlank()) openRouterModel = "qwen/qwen3-next-80b-a3b-instruct:free"
+        if (openRouterModel !in listOf(
+                "qwen/qwen3-next-80b-a3b-instruct:free",
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "nousresearch/hermes-3-llama-3.1-405b:free",
+                "google/gemma-4-26b-a4b-it:free"
+            )) openRouterModel = "qwen/qwen3-next-80b-a3b-instruct:free"
         handwritingAutoInsert = p.getBoolean("handwriting_auto_insert", true)
         handwritingAutoInsertDelayMs = p.getLong("handwriting_auto_insert_delay_ms", 900L).coerceIn(300L, 2000L)
         previewModeEnabled = p.getBoolean("preview_mode", false)
@@ -844,20 +850,21 @@ class QwenVoiceInputMethodService : InputMethodService() {
         root.addView(settingToggle("Show top 3 word suggestions", suggestionModeEnabled) { suggestionModeEnabled = !suggestionModeEnabled })
         root.addView(settingToggle("Voice cleanup", voiceCleanupEnabled) { voiceCleanupEnabled = !voiceCleanupEnabled })
         root.addView(choiceRow("Auto correct: punctuation", listOf(
-            "off" to "Off", "rules" to "Offline\nrules", "pc_ai" to "PC AI", "cloud_ai" to "Cloud AI"
+            "off" to "Off", "rules" to "Offline\nrules", "cloud_ai" to "Cloud AI"
         ), voicePunctuationMode) {
             voicePunctuationMode = it
             voiceAutoPunctuation = it != "off"
         })
-        root.addView(settingToggle("Auto correct: text (AI)", voiceAiTextCorrectionEnabled) { voiceAiTextCorrectionEnabled = !voiceAiTextCorrectionEnabled })
+        root.addView(choiceRow("Auto correct: text", listOf(
+            "off" to "Off", "cloud_ai" to "Cloud AI"
+        ), if (voiceAiTextCorrectionEnabled) "cloud_ai" else "off") {
+            voiceAiTextCorrectionEnabled = it == "cloud_ai"
+        })
         root.addView(choiceRow("Cloud AI model", listOf(
             "qwen/qwen3-next-80b-a3b-instruct:free" to "Qwen3\nNext free",
-            "openrouter/free" to "OpenRouter\nfree",
             "meta-llama/llama-3.3-70b-instruct:free" to "Llama 3.3\n70B free",
             "nousresearch/hermes-3-llama-3.1-405b:free" to "Hermes\n405B free",
-            "google/gemma-4-26b-a4b-it:free" to "Gemma\nfree",
-            "nvidia/nemotron-nano-9b-v2:free" to "Nemotron\nfree",
-            "liquid/lfm-2.5-1.2b-instruct:free" to "Liquid\nfast free"
+            "google/gemma-4-26b-a4b-it:free" to "Gemma\nfree"
         ), openRouterModel) { openRouterModel = it })
         root.addView(Button(this).apply {
             text = if (openRouterApiKey.isBlank()) "Set OpenRouter key from clipboard" else "OpenRouter key set ✓ (tap to replace from clipboard)"
@@ -3293,7 +3300,7 @@ Dee Keyboard full feature guide
                     previewInput.setSelection(previewInput.text.length)
                 }
                 transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "pc_ai" || voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
+                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
             }
         } else {
             val deleteChars = originalWithSpace.length
@@ -3304,7 +3311,7 @@ Dee Keyboard full feature guide
                     commitText(fixed + " ", 1)
                 }
                 transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "pc_ai" || voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
+                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
             }
         }
     }
@@ -3314,7 +3321,6 @@ Dee Keyboard full feature guide
         val wantsTextCorrection = voiceAiTextCorrectionEnabled
         return when {
             voicePunctuationMode == "cloud_ai" || wantsTextCorrection -> applyOpenRouterVoiceCorrection(text, punctuate = wantsPunctuation, correctText = wantsTextCorrection)
-            voicePunctuationMode == "pc_ai" -> applyPcPunctuationIfSelected(text, client)
             voicePunctuationMode == "rules" -> addRulePunctuationFallback(text)
             else -> text
         }

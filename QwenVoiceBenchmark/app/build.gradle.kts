@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 219
-        versionName = "4.7.0-openrouter-autocorrect"
+        versionCode = 220
+        versionName = "4.7.2-clean-autocorrect-ui"
     }
 
 
