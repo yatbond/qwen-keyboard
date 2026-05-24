@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 230
-        versionName = "4.8.2-flow-always-suggest"
+        versionCode = 231
+        versionName = "4.8.3-flow-geometry-score"
     }
 
 

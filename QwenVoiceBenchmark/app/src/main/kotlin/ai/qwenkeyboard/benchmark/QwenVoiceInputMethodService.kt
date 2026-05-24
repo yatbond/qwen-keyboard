@@ -2178,7 +2178,7 @@ Dee Keyboard full feature guide
                             commitText(" ")
                             voiceStatusText = "Flow: $flowCandidate"
                         } else if (flowGestureActive) {
-                            val flowSuggestions = flowGuesses(flowKeys.joinToString(""), 3)
+                            val flowSuggestions = flowGuessesFromGeometry(3, strictAutoCommit = false).ifEmpty { flowGuesses(flowKeys.joinToString(""), 3) }
                             if (flowSuggestions.isNotEmpty()) {
                                 setSuggestionTexts(flowSuggestions)
                                 voiceStatusText = "Flow suggestions"
@@ -2207,10 +2207,65 @@ Dee Keyboard full feature guide
         private fun flowCandidateFromPath(): String? {
             if (!flowInputEnabled || keyboardLanguageMode != "en" || symbols) return null
             if (flowDistance < dp(35) || flowKeys.size < 2) return null
+            val geometry = flowGuessesFromGeometry(2, strictAutoCommit = true)
+            if (geometry.isNotEmpty()) return geometry.first()
             val signature = flowKeys.joinToString("")
             val compact = signature.replace(Regex("(.)\\1+"), "$1")
             val candidates = flowWordMap[compact].orEmpty() + flowWordMap[signature].orEmpty()
             return candidates.firstOrNull() ?: bestFlowGuess(compact)
+        }
+
+        private fun flowGuessesFromGeometry(limit: Int, strictAutoCommit: Boolean): List<String> {
+            if (flowPoints.size < 2) return emptyList()
+            val first = flowKeys.firstOrNull()?.firstOrNull() ?: return emptyList()
+            val pool = (wordFreq.keys + learnedFreq.keys + flowWordMap.values.flatten())
+                .asSequence()
+                .map { it.trim() }
+                .filter { it.length in 2..18 && it.firstOrNull()?.lowercaseChar() == first }
+                .distinctBy { it.lowercase() }
+                .filterNot { forgottenWords.contains(normalizeLearnedWord(it)) }
+                .toList()
+            data class GeoRank(val word: String, val score: Float, val avgDistance: Float)
+            val ranked = pool.mapNotNull { candidate ->
+                val word = compactFlowToken(candidate.lowercase())
+                if (word.length < 2) return@mapNotNull null
+                val score = flowGeometryScore(word) ?: return@mapNotNull null
+                val avg = score / word.length.coerceAtLeast(1)
+                val allowed = if (strictAutoCommit) avg <= dp(30).toFloat() else avg <= dp(58).toFloat()
+                if (allowed) GeoRank(candidate, score - word.length.coerceAtMost(8) * dp(3), avg) else null
+            }.sortedWith(compareBy<GeoRank> { it.score }.thenBy { it.avgDistance }.thenByDescending { it.word.length })
+            if (strictAutoCommit) {
+                val best = ranked.firstOrNull() ?: return emptyList()
+                val second = ranked.getOrNull(1)
+                val clearMargin = second == null || second.score - best.score > dp(18)
+                return if (clearMargin) listOf(best.word) else emptyList()
+            }
+            return ranked.take(limit).map { it.word }
+        }
+
+        private fun flowGeometryScore(word: String): Float? {
+            val centers = keys.filter { isFlowLetterKey(it.action) }.associate { it.action.lowercase()[0] to PointF(it.rect.centerX(), it.rect.centerY()) }
+            var lastIndex = -1
+            var orderPenalty = 0f
+            var total = 0f
+            val compactWord = compactFlowToken(word)
+            for (ch in compactWord) {
+                val center = centers[ch] ?: return null
+                var bestDist = Float.MAX_VALUE
+                var bestIndex = -1
+                for (i in flowPoints.indices) {
+                    val p = flowPoints[i]
+                    val d = kotlin.math.hypot((p.x - center.x).toDouble(), (p.y - center.y).toDouble()).toFloat()
+                    if (d < bestDist) { bestDist = d; bestIndex = i }
+                }
+                total += bestDist
+                if (bestIndex < lastIndex) orderPenalty += dp(22).toFloat() else lastIndex = bestIndex
+            }
+            val firstCenter = centers[compactWord.firstOrNull()] ?: return null
+            val lastCenter = centers[compactWord.lastOrNull()] ?: return null
+            total += kotlin.math.hypot((flowPoints.first().x - firstCenter.x).toDouble(), (flowPoints.first().y - firstCenter.y).toDouble()).toFloat() * 0.8f
+            total += kotlin.math.hypot((flowPoints.last().x - lastCenter.x).toDouble(), (flowPoints.last().y - lastCenter.y).toDouble()).toFloat() * 0.6f
+            return total + orderPenalty
         }
     }
 
