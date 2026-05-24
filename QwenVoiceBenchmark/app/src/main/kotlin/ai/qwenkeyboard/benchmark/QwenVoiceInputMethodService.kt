@@ -266,7 +266,10 @@ class QwenVoiceInputMethodService : InputMethodService() {
         voiceAiTextCorrectionEnabled = p.getBoolean("voice_ai_text_correction", false)
         alibabaApiKey = p.getString("alibaba_modelstudio_api_key", "") ?: ""
         alibabaModel = p.getString("alibaba_modelstudio_model", "qwen3.6-plus") ?: "qwen3.6-plus"
-        if (alibabaModel !in listOf("qwen3.6-plus", "qwen3.6-flash")) alibabaModel = "qwen3.6-plus"
+        if (alibabaModel !in listOf("qwen3.6-plus", "qwen3.6-flash")) {
+            alibabaModel = "qwen3.6-plus"
+            p.edit().putString("alibaba_modelstudio_model", alibabaModel).apply()
+        }
         handwritingAutoInsert = p.getBoolean("handwriting_auto_insert", true)
         handwritingAutoInsertDelayMs = p.getLong("handwriting_auto_insert_delay_ms", 900L).coerceIn(300L, 2000L)
         previewModeEnabled = p.getBoolean("preview_mode", false)
@@ -877,6 +880,12 @@ class QwenVoiceInputMethodService : InputMethodService() {
                 }
             }
         }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(3) })
+        root.addView(Button(this).apply {
+            text = "Test Cloud AI correction"
+            textSize = 12f
+            isAllCaps = false
+            setOnClickListener { runAlibabaCloudAiSelfTest() }
+        }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(3) })
         root.addView(settingToggle("Handwriting auto-insert best match", handwritingAutoInsert) { handwritingAutoInsert = !handwritingAutoInsert })
         root.addView(choiceRow("Handwrite insert delay", listOf(
             "500" to "500ms", "700" to "700ms", "900" to "900ms", "1200" to "1200ms"
@@ -1149,6 +1158,8 @@ Dee Keyboard full feature guide
 • Offline rules are local and always available, but only do lightweight punctuation.
 • Cloud AI now uses Alibaba Cloud Model Studio / Qwen directly from the phone.
 • Paste your Alibaba Model Studio API key into the clipboard, then tap “Set Alibaba Model Studio key from clipboard”. The key stays on the phone in app preferences.
+• To get a key, open Alibaba Cloud Model Studio API keys: https://modelstudio.console.alibabacloud.com/cn-hongkong?tab=api#/api-key
+• Tap “Test Cloud AI correction” to run the real phone-side Alibaba correction path. The status box shows whether it worked and previews the corrected output.
 • Cloud AI model choices are Qwen3.6 Plus and Qwen3.6 Flash for the Hong Kong workspace. Plus is better quality; Flash is faster/cheaper.
 • Auto correct: text uses Cloud AI to fix obvious ASR word mistakes, capitalization and Chinese character mistakes after dictation stops. It should preserve spoken fillers such as um/uh/ah/ar rather than making the sentence overly clean.
 • If Alibaba Cloud AI fails or no key is set, the keyboard shows a status message and falls back to offline cleanup/punctuation instead of silently doing nothing.
@@ -3405,20 +3416,21 @@ Dee Keyboard full feature guide
                 chunk.file.delete()
             }
         }
-        finalizeVoicePunctuationAfterChunks(textFixClient)
+        val finalStatus = finalizeVoicePunctuationAfterChunks(textFixClient)
         postUi {
             micButton.text = "Start Dictation"
             if (::recordButton.isInitialized) recordButton.text = "●"
-            setIdleStatus(if (verboseMode) "Dictation stopped" else "")
+            if (finalStatus.isNotBlank()) voiceStatusText = finalStatus else setIdleStatus(if (verboseMode) "Dictation stopped" else "")
         }
     }
 
-    private fun finalizeVoicePunctuationAfterChunks(client: PcAsrClient?) {
+    private fun finalizeVoicePunctuationAfterChunks(client: PcAsrClient?): String {
         val originalWithSpace = buffer.toString()
         val original = originalWithSpace.trim()
-        if (original.isBlank() || (voicePunctuationMode == "off" && !voiceAiTextCorrectionEnabled)) return
+        if (original.isBlank() || (voicePunctuationMode == "off" && !voiceAiTextCorrectionEnabled)) return ""
         val fixed = applyFinalVoicePunctuation(original, client).trim()
-        if (fixed.isBlank() || fixed == original) return
+        if (fixed.isBlank()) return "AI correction returned blank; kept original"
+        if (fixed == original) return if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI checked; no change needed" else "Punctuation checked; no change needed"
         if (previewModeEnabled) {
             buffer.clear(); buffer.append(fixed).append(' ')
             previewLastInsertedText = fixed
@@ -3428,7 +3440,7 @@ Dee Keyboard full feature guide
                     previewInput.setSelection(previewInput.text.length)
                 }
                 transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
+                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied"
             }
         } else {
             val deleteChars = originalWithSpace.length
@@ -3439,9 +3451,10 @@ Dee Keyboard full feature guide
                     commitText(fixed + " ", 1)
                 }
                 transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
+                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied"
             }
         }
+        return if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied"
     }
 
     private fun applyFinalVoicePunctuation(text: String, client: PcAsrClient?): String {
@@ -3452,6 +3465,24 @@ Dee Keyboard full feature guide
             voicePunctuationMode == "rules" -> addRulePunctuationFallback(text)
             else -> text
         }
+    }
+
+    private fun runAlibabaCloudAiSelfTest() {
+        val sample = "um I think ah we should test this now uh 食咗飯未啊 跟住之後系咪去踢波咧"
+        voiceStatusText = "Alibaba AI phone-side test starting…"
+        Thread {
+            val started = System.currentTimeMillis()
+            val fixed = applyAlibabaVoiceCorrection(sample, punctuate = true, correctText = true).trim()
+            val elapsed = System.currentTimeMillis() - started
+            postUi {
+                transcript.text = fixed.ifBlank { sample }
+                voiceStatusText = if (fixed.isNotBlank() && fixed != sample) {
+                    "Alibaba AI phone test OK (${elapsed}ms): ${fixed.take(120)}"
+                } else {
+                    "Alibaba AI phone test returned no change (${elapsed}ms)"
+                }
+            }
+        }.start()
     }
 
     private fun applyAlibabaVoiceCorrection(text: String, punctuate: Boolean, correctText: Boolean): String {

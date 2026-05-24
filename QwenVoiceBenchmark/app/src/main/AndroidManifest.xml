@@ -30,6 +30,14 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".DebugAlibabaAiTestReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="ai.qwenkeyboard.voicekeyboard.DEBUG_ALIBABA_AI_TEST" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".QwenVoiceInputMethodService"
             android:exported="true"
