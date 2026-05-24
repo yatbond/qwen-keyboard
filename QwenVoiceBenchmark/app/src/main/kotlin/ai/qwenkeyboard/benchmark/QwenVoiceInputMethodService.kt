@@ -4272,6 +4272,11 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
         val sig = compactFlowToken(signature)
         if (sig.length < 2) return emptyList()
         val first = sig.firstOrNull() ?: return emptyList()
+        val minCandidateLen = when {
+            sig.length >= 9 -> 5
+            sig.length >= 6 -> 4
+            else -> 2
+        }
         val candidates = (wordFreq.keys + learnedFreq.keys + flowWordMap.values.flatten())
             .asSequence()
             .map { it.trim() }
@@ -4279,14 +4284,15 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
             .distinctBy { it.lowercase() }
             .mapNotNull { candidate ->
                 val word = compactFlowToken(candidate.lowercase())
-                if (word.isBlank()) null else {
+                if (word.isBlank() || word.length < minCandidateLen) null else {
                     val score = flowScore(sig, word)
                     val coverage = flowCoverage(sig, word)
-                    val allowed = coverage >= 0.55f && score <= maxOf(14, word.length + 8)
-                    if (allowed) candidate to score else null
+                    val orderedCoverage = flowOrderedCoverage(sig, word)
+                    val allowed = coverage >= 0.55f && orderedCoverage >= 0.45f && score <= maxOf(14, word.length + 8)
+                    if (allowed) candidate to (score - word.length.coerceAtMost(8) / 2) else null
                 }
             }
-            .sortedWith(compareBy<Pair<String, Int>> { it.second }.thenBy { it.first.length })
+            .sortedWith(compareBy<Pair<String, Int>> { it.second }.thenByDescending { it.first.length })
             .map { it.first }
             .filterNot { forgottenWords.contains(normalizeLearnedWord(it)) }
             .take(limit)
@@ -4301,6 +4307,22 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
         var covered = 0
         for (ch in word.toSet()) if (signature.contains(ch)) covered++
         return covered.toFloat() / word.toSet().size.toFloat()
+    }
+
+    private fun flowOrderedCoverage(signature: String, word: String): Float {
+        if (word.isBlank()) return 0f
+        var i = 0
+        var matched = 0
+        for (ch in word) {
+            val found = signature.indexOf(ch, i)
+            if (found >= 0) {
+                matched++
+                i = found + 1
+            } else if (signature.contains(ch)) {
+                matched++ // Present but out of order because the finger looped/overshot.
+            }
+        }
+        return matched.toFloat() / word.length.toFloat()
     }
 
     private fun flowScore(signature: String, word: String): Int {
