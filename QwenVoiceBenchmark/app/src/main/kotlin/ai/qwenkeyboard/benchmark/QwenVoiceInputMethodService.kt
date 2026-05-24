@@ -4555,18 +4555,29 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
     }
 
     private fun keyboardCanvasHeightPx(): Int {
-        val heightMultiplier = when (keyboardSizeMode) { "compact" -> 0.86f; "tall" -> 1.12f; else -> 1.0f }
+        val heightMultiplier = when (keyboardSizeMode) { "compact" -> 0.74f; "tall" -> 1.26f; else -> 1.0f }
         val base = ((if (previewModeEnabled) dp(216) else dp(322)) * heightMultiplier).toInt()
         if (!displayAwareMode) return base
         if (isLandscapeLayout() && !previewModeEnabled) {
             val hDp = resources.displayMetrics.heightPixels / resources.displayMetrics.density
-            val target = (hDp * 0.34f).toInt()
-            return dp(target).coerceIn(dp(128), dp(150))
+            val targetFactor = when (keyboardSizeMode) { "compact" -> 0.28f; "tall" -> 0.40f; else -> 0.34f }
+            val target = (hDp * targetFactor).toInt()
+            val min = when (keyboardSizeMode) { "compact" -> dp(106); "tall" -> dp(150); else -> dp(128) }
+            val max = when (keyboardSizeMode) { "compact" -> dp(132); "tall" -> dp(184); else -> dp(150) }
+            return dp(target).coerceIn(min, max)
         }
         val hDp = resources.displayMetrics.heightPixels / resources.displayMetrics.density
         val scale = (hDp / 820f).coerceIn(0.84f, 1.08f)
-        val min = if (previewModeEnabled) dp(190) else dp(270)
-        val max = if (previewModeEnabled) dp(250) else dp(348)
+        val min = if (previewModeEnabled) {
+            when (keyboardSizeMode) { "compact" -> dp(156); "tall" -> dp(224); else -> dp(190) }
+        } else {
+            when (keyboardSizeMode) { "compact" -> dp(224); "tall" -> dp(330); else -> dp(270) }
+        }
+        val max = if (previewModeEnabled) {
+            when (keyboardSizeMode) { "compact" -> dp(206); "tall" -> dp(292); else -> dp(250) }
+        } else {
+            when (keyboardSizeMode) { "compact" -> dp(286); "tall" -> dp(418); else -> dp(348) }
+        }
         return (base * scale).toInt().coerceIn(min, max)
     }
 

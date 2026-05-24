@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 231
-        versionName = "4.8.3-flow-geometry-score"
+        versionCode = 232
+        versionName = "4.8.4-keyboard-height-tuning"
     }
 
 
