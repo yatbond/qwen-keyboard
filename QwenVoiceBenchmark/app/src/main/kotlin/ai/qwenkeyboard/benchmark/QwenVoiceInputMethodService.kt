@@ -2178,7 +2178,13 @@ Dee Keyboard full feature guide
                             commitText(" ")
                             voiceStatusText = "Flow: $flowCandidate"
                         } else if (flowGestureActive) {
-                            voiceStatusText = "Flow: no match (${flowKeys.joinToString("").take(12)})"
+                            val flowSuggestions = flowGuesses(flowKeys.joinToString(""), 3)
+                            if (flowSuggestions.isNotEmpty()) {
+                                setSuggestionTexts(flowSuggestions)
+                                voiceStatusText = "Flow suggestions"
+                            } else {
+                                voiceStatusText = "Flow: no match (${flowKeys.joinToString("").take(12)})"
+                            }
                         } else if (!repeatFired) {
                             performCanvasKey(key)
                         }
@@ -4260,23 +4266,32 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
         "group" to listOf("group"), "signal" to listOf("Signal"), "whatsapp" to listOf("WhatsApp")
     )
 
-    private fun bestFlowGuess(signature: String): String? {
+    private fun bestFlowGuess(signature: String): String? = flowGuesses(signature, 1).firstOrNull()
+
+    private fun flowGuesses(signature: String, limit: Int = 3): List<String> {
         val sig = compactFlowToken(signature)
-        if (sig.length < 2) return null
-        val first = sig.firstOrNull() ?: return null
+        if (sig.length < 2) return emptyList()
+        val first = sig.firstOrNull() ?: return emptyList()
         val candidates = (wordFreq.keys + learnedFreq.keys + flowWordMap.values.flatten())
             .asSequence()
             .map { it.trim() }
             .filter { it.length in 2..18 && it.firstOrNull()?.lowercaseChar() == first }
-            .distinct()
-            .toList()
-        return candidates.minByOrNull { flowScore(sig, it.lowercase()) }
-            ?.takeIf { candidate ->
+            .distinctBy { it.lowercase() }
+            .mapNotNull { candidate ->
                 val word = compactFlowToken(candidate.lowercase())
-                val score = flowScore(sig, word)
-                val coverage = flowCoverage(sig, word)
-                coverage >= 0.72f && score <= maxOf(8, word.length + 3)
+                if (word.isBlank()) null else {
+                    val score = flowScore(sig, word)
+                    val coverage = flowCoverage(sig, word)
+                    val allowed = coverage >= 0.55f && score <= maxOf(14, word.length + 8)
+                    if (allowed) candidate to score else null
+                }
             }
+            .sortedWith(compareBy<Pair<String, Int>> { it.second }.thenBy { it.first.length })
+            .map { it.first }
+            .filterNot { forgottenWords.contains(normalizeLearnedWord(it)) }
+            .take(limit)
+            .toList()
+        return candidates
     }
 
     private fun compactFlowToken(value: String): String = value.lowercase().replace(Regex("[^a-z]"), "").replace(Regex("(.)\\1+"), "$1")

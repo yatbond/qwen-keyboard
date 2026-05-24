@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 226
-        versionName = "4.7.8-flow-names-overshoot"
+        versionCode = 227
+        versionName = "4.7.9-flow-suggestion-bar"
     }
 
 
