@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 228
-        versionName = "4.8.0-flow-no-short-fragments"
+        versionCode = 229
+        versionName = "4.8.1-flow-confidence-suggestions"
     }
 
 
