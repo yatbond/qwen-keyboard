@@ -853,8 +853,11 @@ class QwenVoiceInputMethodService : InputMethodService() {
         root.addView(choiceRow("Cloud AI model", listOf(
             "qwen/qwen3-next-80b-a3b-instruct:free" to "Qwen3\nNext free",
             "openrouter/free" to "OpenRouter\nfree",
+            "meta-llama/llama-3.3-70b-instruct:free" to "Llama 3.3\n70B free",
+            "nousresearch/hermes-3-llama-3.1-405b:free" to "Hermes\n405B free",
             "google/gemma-4-26b-a4b-it:free" to "Gemma\nfree",
-            "nvidia/nemotron-nano-9b-v2:free" to "Nemotron\nfree"
+            "nvidia/nemotron-nano-9b-v2:free" to "Nemotron\nfree",
+            "liquid/lfm-2.5-1.2b-instruct:free" to "Liquid\nfast free"
         ), openRouterModel) { openRouterModel = it })
         root.addView(Button(this).apply {
             text = if (openRouterApiKey.isBlank()) "Set OpenRouter key from clipboard" else "OpenRouter key set ✓ (tap to replace from clipboard)"
