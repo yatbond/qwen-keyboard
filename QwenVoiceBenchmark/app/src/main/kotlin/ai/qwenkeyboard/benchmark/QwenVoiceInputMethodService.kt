@@ -4254,44 +4254,65 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
         "good" to listOf("good"), "great" to listOf("great"), "go" to listOf("go"), "going" to listOf("going"), "home" to listOf("home"),
         "have" to listOf("have"), "how" to listOf("how"), "now" to listOf("now"), "not" to listOf("not"), "need" to listOf("need"),
         "want" to listOf("want"), "what" to listOf("what"), "when" to listOf("when"), "where" to listOf("where"), "why" to listOf("why"),
-        "yes" to listOf("yes"), "no" to listOf("no"), "ok" to listOf("ok"), "okay" to listOf("okay"), "soccer" to listOf("soccer")
+        "yes" to listOf("yes"), "no" to listOf("no"), "ok" to listOf("ok"), "okay" to listOf("okay"), "soccer" to listOf("soccer"),
+        "derrick" to listOf("Derrick"), "anthony" to listOf("Anthony"), "dee" to listOf("Dee"), "mary" to listOf("Mary"),
+        "jane" to listOf("Jane"), "legend" to listOf("Legend"), "share" to listOf("share"), "funny" to listOf("funny"),
+        "group" to listOf("group"), "signal" to listOf("Signal"), "whatsapp" to listOf("WhatsApp")
     )
 
     private fun bestFlowGuess(signature: String): String? {
-        if (signature.length < 3) return null
-        val first = signature.firstOrNull() ?: return null
-        val last = signature.lastOrNull()
+        val sig = compactFlowToken(signature)
+        if (sig.length < 2) return null
+        val first = sig.firstOrNull() ?: return null
         val candidates = (wordFreq.keys + learnedFreq.keys + flowWordMap.values.flatten())
             .asSequence()
             .map { it.trim() }
-            .filter { it.length in 2..14 && it.firstOrNull()?.lowercaseChar() == first }
+            .filter { it.length in 2..18 && it.firstOrNull()?.lowercaseChar() == first }
             .distinct()
             .toList()
-        return candidates.minByOrNull { flowScore(signature, it.lowercase()) }
+        return candidates.minByOrNull { flowScore(sig, it.lowercase()) }
             ?.takeIf { candidate ->
-                val score = flowScore(signature, candidate.lowercase())
-                val suffixBonus = if (last != null && candidate.lastOrNull()?.lowercaseChar() == last) 1 else 0
-                score <= maxOf(5, candidate.length / 2 + 3 + suffixBonus)
+                val word = compactFlowToken(candidate.lowercase())
+                val score = flowScore(sig, word)
+                val coverage = flowCoverage(sig, word)
+                coverage >= 0.72f && score <= maxOf(8, word.length + 3)
             }
     }
 
+    private fun compactFlowToken(value: String): String = value.lowercase().replace(Regex("[^a-z]"), "").replace(Regex("(.)\\1+"), "$1")
+
+    private fun flowCoverage(signature: String, word: String): Float {
+        if (word.isBlank()) return 0f
+        var covered = 0
+        for (ch in word.toSet()) if (signature.contains(ch)) covered++
+        return covered.toFloat() / word.toSet().size.toFloat()
+    }
+
     private fun flowScore(signature: String, word: String): Int {
+        val sig = compactFlowToken(signature)
+        val target = compactFlowToken(word)
+        if (sig.isBlank() || target.isBlank()) return 999
         var i = 0
         var misses = 0
         var jumps = 0
-        for (ch in word) {
-            val found = signature.indexOf(ch, i)
+        var matched = 0
+        for (ch in target) {
+            val found = sig.indexOf(ch, i)
             if (found >= 0) {
+                matched++
                 jumps += (found - i).coerceAtLeast(0)
                 i = found + 1
+            } else if (sig.contains(ch)) {
+                misses += 1 // User looped/overshot; letter exists but order was messy.
             } else {
-                misses += 2
+                misses += 3
             }
         }
-        val extra = kotlin.math.abs(signature.length - word.length)
-        val prefixPenalty = if (signature.firstOrNull() == word.firstOrNull()) 0 else 4
-        val suffixPenalty = if (signature.lastOrNull() == word.lastOrNull() || signature.contains(word.last())) 0 else 3
-        return misses + jumps / 2 + extra / 2 + prefixPenalty + suffixPenalty
+        val extra = kotlin.math.max(0, sig.length - target.length)
+        val prefixPenalty = if (sig.firstOrNull() == target.firstOrNull()) 0 else 6
+        val suffixPenalty = if (sig.lastOrNull() == target.lastOrNull() || sig.contains(target.last())) 0 else 3
+        val coveragePenalty = ((target.length - matched).coerceAtLeast(0)) * 2
+        return misses + jumps / 3 + extra / 3 + prefixPenalty + suffixPenalty + coveragePenalty
     }
 
     private val suchengMap = linkedMapOf(
