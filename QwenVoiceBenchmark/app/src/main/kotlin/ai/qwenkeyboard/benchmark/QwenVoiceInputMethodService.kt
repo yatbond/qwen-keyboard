@@ -2177,6 +2177,8 @@ Dee Keyboard full feature guide
                             commitText(flowCandidate)
                             commitText(" ")
                             voiceStatusText = "Flow: $flowCandidate"
+                        } else if (flowGestureActive) {
+                            voiceStatusText = "Flow: no match (${flowKeys.joinToString("").take(12)})"
                         } else if (!repeatFired) {
                             performCanvasKey(key)
                         }
@@ -4247,21 +4249,30 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
         "today" to listOf("today"), "tomorrow" to listOf("tomorrow"), "tonight" to listOf("tonight"), "morning" to listOf("morning"),
         "meeting" to listOf("meeting"), "project" to listOf("project"), "version" to listOf("version"), "settings" to listOf("settings"),
         "finish" to listOf("finish"), "continue" to listOf("continue"), "improve" to listOf("improve"), "install" to listOf("install"),
-        "testing" to listOf("testing"), "working" to listOf("working"), "problem" to listOf("problem"), "possible" to listOf("possible")
+        "testing" to listOf("testing"), "working" to listOf("working"), "problem" to listOf("problem"), "possible" to listOf("possible"),
+        "dog" to listOf("dog"), "cat" to listOf("cat"), "can" to listOf("can"), "day" to listOf("day"), "done" to listOf("done"),
+        "good" to listOf("good"), "great" to listOf("great"), "go" to listOf("go"), "going" to listOf("going"), "home" to listOf("home"),
+        "have" to listOf("have"), "how" to listOf("how"), "now" to listOf("now"), "not" to listOf("not"), "need" to listOf("need"),
+        "want" to listOf("want"), "what" to listOf("what"), "when" to listOf("when"), "where" to listOf("where"), "why" to listOf("why"),
+        "yes" to listOf("yes"), "no" to listOf("no"), "ok" to listOf("ok"), "okay" to listOf("okay"), "soccer" to listOf("soccer")
     )
 
     private fun bestFlowGuess(signature: String): String? {
         if (signature.length < 3) return null
         val first = signature.firstOrNull() ?: return null
-        val last = signature.lastOrNull() ?: return null
+        val last = signature.lastOrNull()
         val candidates = (wordFreq.keys + learnedFreq.keys + flowWordMap.values.flatten())
             .asSequence()
             .map { it.trim() }
-            .filter { it.length in 3..14 && it.firstOrNull()?.lowercaseChar() == first && it.lastOrNull()?.lowercaseChar() == last }
+            .filter { it.length in 2..14 && it.firstOrNull()?.lowercaseChar() == first }
             .distinct()
             .toList()
         return candidates.minByOrNull { flowScore(signature, it.lowercase()) }
-            ?.takeIf { flowScore(signature, it.lowercase()) <= maxOf(3, it.length / 2) }
+            ?.takeIf { candidate ->
+                val score = flowScore(signature, candidate.lowercase())
+                val suffixBonus = if (last != null && candidate.lastOrNull()?.lowercaseChar() == last) 1 else 0
+                score <= maxOf(5, candidate.length / 2 + 3 + suffixBonus)
+            }
     }
 
     private fun flowScore(signature: String, word: String): Int {
@@ -4279,7 +4290,7 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
         }
         val extra = kotlin.math.abs(signature.length - word.length)
         val prefixPenalty = if (signature.firstOrNull() == word.firstOrNull()) 0 else 4
-        val suffixPenalty = if (signature.lastOrNull() == word.lastOrNull()) 0 else 4
+        val suffixPenalty = if (signature.lastOrNull() == word.lastOrNull() || signature.contains(word.last())) 0 else 3
         return misses + jumps / 2 + extra / 2 + prefixPenalty + suffixPenalty
     }
 
