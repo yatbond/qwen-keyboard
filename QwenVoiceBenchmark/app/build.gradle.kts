@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 223
-        versionName = "4.7.5-fix-flow-swipe"
+        versionCode = 224
+        versionName = "4.7.6-flow-path-trail"
     }
 
 

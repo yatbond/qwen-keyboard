@@ -4,6 +4,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.RectF
 import android.inputmethodservice.InputMethodService
 import android.icu.text.Transliterator
@@ -1800,6 +1802,20 @@ Dee Keyboard full feature guide
         private var lastFlowX = 0f
         private var lastFlowY = 0f
         private var flowGestureActive = false
+        private val flowPoints = mutableListOf<PointF>()
+        private val flowTrailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFF7DD3FC.toInt()
+            style = Paint.Style.STROKE
+            strokeWidth = dp(5).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            alpha = 210
+        }
+        private val flowDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFBAE6FD.toInt()
+            style = Paint.Style.FILL
+            alpha = 235
+        }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
@@ -1831,6 +1847,19 @@ Dee Keyboard full feature guide
                 val y = key.rect.centerY() + labelYOffset - (textPaint.descent() + textPaint.ascent()) / 2f
                 canvas.drawText(key.label, key.rect.centerX(), y, textPaint)
             }
+            drawFlowTrail(canvas)
+        }
+
+        private fun drawFlowTrail(canvas: Canvas) {
+            if (!flowInputEnabled || flowPoints.size < 2 || symbols || keyboardLanguageMode != "en") return
+            flowTrailPaint.strokeWidth = dp(if (isLandscapeLayout()) 4 else 5).toFloat()
+            val path = Path().apply {
+                moveTo(flowPoints.first().x, flowPoints.first().y)
+                for (i in 1 until flowPoints.size) lineTo(flowPoints[i].x, flowPoints[i].y)
+            }
+            canvas.drawPath(path, flowTrailPaint)
+            for (p in flowPoints) canvas.drawCircle(p.x, p.y, dp(4).toFloat(), flowDotPaint)
+            flowPoints.lastOrNull()?.let { canvas.drawCircle(it.x, it.y, dp(8).toFloat(), flowDotPaint) }
         }
 
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -2071,11 +2100,12 @@ Dee Keyboard full feature guide
                     touchDownX = event.x; touchDownY = event.y; didSwipeDelete = false; repeatFired = false
                     downKey = nearestKey(event.x, event.y)
                     flowKeys.clear()
+                    flowPoints.clear()
                     flowDistance = 0f
                     flowGestureActive = false
                     lastFlowX = event.x
                     lastFlowY = event.y
-                    downKey?.action?.let { if (flowInputEnabled && !symbols && keyboardLanguageMode == "en" && isFlowLetterKey(it)) flowKeys.add(it.lowercase()) }
+                    downKey?.action?.let { if (flowInputEnabled && !symbols && keyboardLanguageMode == "en" && isFlowLetterKey(it)) { flowKeys.add(it.lowercase()); flowPoints.add(PointF(event.x, event.y)) } }
                     if (downKey?.action == "VOICE_HOLD") {
                         holdVoiceFromKeyboard = true
                         if (!running.get()) startDictation()
@@ -2114,6 +2144,11 @@ Dee Keyboard full feature guide
                             repeatRunnable?.let { repeatHandler.removeCallbacks(it) }
                             repeatRunnable = null
                         }
+                        if (flowPoints.isEmpty() || kotlin.math.hypot((event.x - flowPoints.last().x).toDouble(), (event.y - flowPoints.last().y).toDouble()) > dp(8)) {
+                            flowPoints.add(PointF(event.x, event.y))
+                            if (flowPoints.size > 96) flowPoints.removeAt(0)
+                            invalidate()
+                        }
                         nearestKey(event.x, event.y)?.action?.let { action ->
                             if (isFlowLetterKey(action)) {
                                 val k = action.lowercase()
@@ -2146,13 +2181,13 @@ Dee Keyboard full feature guide
                             performCanvasKey(key)
                         }
                     }
-                    flowKeys.clear(); flowDistance = 0f; flowGestureActive = false
+                    flowKeys.clear(); flowPoints.clear(); flowDistance = 0f; flowGestureActive = false
                     downKey = null; invalidate(); return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     repeatRunnable?.let { repeatHandler.removeCallbacks(it) }; repeatRunnable = null
                     if (downKey?.action == "VOICE_HOLD") { if (running.get()) stopDictation(); holdVoiceFromKeyboard = false }
-                    flowKeys.clear(); flowDistance = 0f; flowGestureActive = false
+                    flowKeys.clear(); flowPoints.clear(); flowDistance = 0f; flowGestureActive = false
                     downKey = null; invalidate(); return true
                 }
             }
