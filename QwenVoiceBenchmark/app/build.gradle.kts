@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 218
-        versionName = "4.6.0-final-ai-punctuation"
+        versionCode = 219
+        versionName = "4.7.0-openrouter-autocorrect"
     }
 
 

@@ -28,6 +28,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import org.json.JSONArray
 import org.json.JSONObject
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
@@ -94,7 +95,10 @@ class QwenVoiceInputMethodService : InputMethodService() {
     private var suggestionModeEnabled = true
     private var voiceCleanupEnabled = true
     private var voiceAutoPunctuation = false
-    private var voicePunctuationMode = "off" // off, rules, pc_ai
+    private var voicePunctuationMode = "off" // off, rules, pc_ai, cloud_ai
+    private var voiceAiTextCorrectionEnabled = false
+    private var openRouterApiKey = ""
+    private var openRouterModel = "qwen/qwen3-next-80b-a3b-instruct:free"
     private var previewModeEnabled = false
     private var displayAwareMode = false
     private var keyboardSizeMode = "normal" // compact, normal, tall
@@ -254,8 +258,12 @@ class QwenVoiceInputMethodService : InputMethodService() {
         voiceCleanupEnabled = p.getBoolean("voice_cleanup", true)
         voiceAutoPunctuation = p.getBoolean("voice_auto_punctuation", false)
         voicePunctuationMode = p.getString("voice_punctuation_mode", if (voiceAutoPunctuation) "rules" else "off") ?: "off"
-        if (voicePunctuationMode !in listOf("off", "rules", "pc_ai")) voicePunctuationMode = if (voiceAutoPunctuation) "rules" else "off"
+        if (voicePunctuationMode !in listOf("off", "rules", "pc_ai", "cloud_ai")) voicePunctuationMode = if (voiceAutoPunctuation) "rules" else "off"
         voiceAutoPunctuation = voicePunctuationMode != "off"
+        voiceAiTextCorrectionEnabled = p.getBoolean("voice_ai_text_correction", false)
+        openRouterApiKey = p.getString("openrouter_api_key", "") ?: ""
+        openRouterModel = p.getString("openrouter_model", "qwen/qwen3-next-80b-a3b-instruct:free") ?: "qwen/qwen3-next-80b-a3b-instruct:free"
+        if (openRouterModel.isBlank()) openRouterModel = "qwen/qwen3-next-80b-a3b-instruct:free"
         handwritingAutoInsert = p.getBoolean("handwriting_auto_insert", true)
         handwritingAutoInsertDelayMs = p.getLong("handwriting_auto_insert_delay_ms", 900L).coerceIn(300L, 2000L)
         previewModeEnabled = p.getBoolean("preview_mode", false)
@@ -334,6 +342,9 @@ class QwenVoiceInputMethodService : InputMethodService() {
             .putBoolean("voice_cleanup", voiceCleanupEnabled)
             .putBoolean("voice_auto_punctuation", voiceAutoPunctuation)
             .putString("voice_punctuation_mode", voicePunctuationMode)
+            .putBoolean("voice_ai_text_correction", voiceAiTextCorrectionEnabled)
+            .putString("openrouter_api_key", openRouterApiKey)
+            .putString("openrouter_model", openRouterModel)
             .putBoolean("handwriting_auto_insert", handwritingAutoInsert)
             .putLong("handwriting_auto_insert_delay_ms", handwritingAutoInsertDelayMs.coerceIn(300L, 2000L))
             .putBoolean("preview_mode", previewModeEnabled)
@@ -832,12 +843,35 @@ class QwenVoiceInputMethodService : InputMethodService() {
         root.addView(settingToggle("Autocorrect closest dictionary word", autoCorrectEnabled) { autoCorrectEnabled = !autoCorrectEnabled })
         root.addView(settingToggle("Show top 3 word suggestions", suggestionModeEnabled) { suggestionModeEnabled = !suggestionModeEnabled })
         root.addView(settingToggle("Voice cleanup", voiceCleanupEnabled) { voiceCleanupEnabled = !voiceCleanupEnabled })
-        root.addView(choiceRow("Voice punctuation", listOf(
-            "off" to "Off", "rules" to "Offline\nrules", "pc_ai" to "PC AI"
+        root.addView(choiceRow("Auto correct: punctuation", listOf(
+            "off" to "Off", "rules" to "Offline\nrules", "pc_ai" to "PC AI", "cloud_ai" to "Cloud AI"
         ), voicePunctuationMode) {
             voicePunctuationMode = it
             voiceAutoPunctuation = it != "off"
         })
+        root.addView(settingToggle("Auto correct: text (AI)", voiceAiTextCorrectionEnabled) { voiceAiTextCorrectionEnabled = !voiceAiTextCorrectionEnabled })
+        root.addView(choiceRow("Cloud AI model", listOf(
+            "qwen/qwen3-next-80b-a3b-instruct:free" to "Qwen3\nNext free",
+            "openrouter/free" to "OpenRouter\nfree",
+            "google/gemma-4-26b-a4b-it:free" to "Gemma\nfree",
+            "nvidia/nemotron-nano-9b-v2:free" to "Nemotron\nfree"
+        ), openRouterModel) { openRouterModel = it })
+        root.addView(Button(this).apply {
+            text = if (openRouterApiKey.isBlank()) "Set OpenRouter key from clipboard" else "OpenRouter key set ✓ (tap to replace from clipboard)"
+            textSize = 12f
+            isAllCaps = false
+            setOnClickListener {
+                val clip = (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.coerceToText(this@QwenVoiceInputMethodService)?.toString()?.trim().orEmpty()
+                if (clip.startsWith("sk-or-") || clip.length > 20) {
+                    openRouterApiKey = clip
+                    savePrefs()
+                    voiceStatusText = "OpenRouter key saved"
+                    refreshSettingsPanel()
+                } else {
+                    voiceStatusText = "Copy OpenRouter API key first"
+                }
+            }
+        }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(3) })
         root.addView(settingToggle("Handwriting auto-insert best match", handwritingAutoInsert) { handwritingAutoInsert = !handwritingAutoInsert })
         root.addView(choiceRow("Handwrite insert delay", listOf(
             "500" to "500ms", "700" to "700ms", "900" to "900ms", "1200" to "1200ms"
@@ -3244,7 +3278,7 @@ Dee Keyboard full feature guide
     private fun finalizeVoicePunctuationAfterChunks(client: PcAsrClient?) {
         val originalWithSpace = buffer.toString()
         val original = originalWithSpace.trim()
-        if (original.isBlank() || voicePunctuationMode == "off") return
+        if (original.isBlank() || (voicePunctuationMode == "off" && !voiceAiTextCorrectionEnabled)) return
         val fixed = applyFinalVoicePunctuation(original, client).trim()
         if (fixed.isBlank() || fixed == original) return
         if (previewModeEnabled) {
@@ -3256,7 +3290,7 @@ Dee Keyboard full feature guide
                     previewInput.setSelection(previewInput.text.length)
                 }
                 transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "pc_ai") "AI punctuation applied" else "Punctuation applied"
+                voiceStatusText = if (voicePunctuationMode == "pc_ai" || voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
             }
         } else {
             val deleteChars = originalWithSpace.length
@@ -3267,16 +3301,64 @@ Dee Keyboard full feature guide
                     commitText(fixed + " ", 1)
                 }
                 transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "pc_ai") "AI punctuation applied" else "Punctuation applied"
+                voiceStatusText = if (voicePunctuationMode == "pc_ai" || voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "AI correction applied" else "Punctuation applied"
             }
         }
     }
 
     private fun applyFinalVoicePunctuation(text: String, client: PcAsrClient?): String {
-        return when (voicePunctuationMode) {
-            "pc_ai" -> applyPcPunctuationIfSelected(text, client)
-            "rules" -> addRulePunctuationFallback(text)
+        val wantsPunctuation = voicePunctuationMode != "off"
+        val wantsTextCorrection = voiceAiTextCorrectionEnabled
+        return when {
+            voicePunctuationMode == "cloud_ai" || wantsTextCorrection -> applyOpenRouterVoiceCorrection(text, punctuate = wantsPunctuation, correctText = wantsTextCorrection)
+            voicePunctuationMode == "pc_ai" -> applyPcPunctuationIfSelected(text, client)
+            voicePunctuationMode == "rules" -> addRulePunctuationFallback(text)
             else -> text
+        }
+    }
+
+    private fun applyOpenRouterVoiceCorrection(text: String, punctuate: Boolean, correctText: Boolean): String {
+        val key = openRouterApiKey.trim()
+        if (key.isBlank()) return if (punctuate) addRulePunctuationFallback(text) else text
+        return try {
+            val url = java.net.URL("https://openrouter.ai/api/v1/chat/completions")
+            val conn = (url.openConnection() as java.net.HttpURLConnection)
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 90_000
+            conn.doOutput = true
+            conn.setRequestProperty("Authorization", "Bearer $key")
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("HTTP-Referer", "https://github.com/yatbond/qwen-keyboard")
+            conn.setRequestProperty("X-Title", "Dee Keyboard")
+            val languageHint = when {
+                zhMode == "trad" -> "Use Traditional Chinese punctuation and keep Traditional Chinese if the text is Chinese."
+                zhMode == "simp" -> "Use Simplified Chinese punctuation and keep Simplified Chinese if the text is Chinese."
+                else -> "Preserve the input language. For Chinese/Cantonese, use natural Chinese punctuation. For English, use English punctuation and capitalization."
+            }
+            val task = when {
+                punctuate && correctText -> "Add natural punctuation/capitalization and lightly correct obvious ASR dictation mistakes. Preserve meaning and wording as much as possible."
+                punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording or meaning."
+                correctText -> "Lightly correct obvious ASR dictation mistakes only. Do not add unnecessary punctuation or rewrite meaning."
+                else -> "Return the text unchanged."
+            }
+            val body = JSONObject()
+                .put("model", openRouterModel.ifBlank { "qwen/qwen3-next-80b-a3b-instruct:free" })
+                .put("temperature", 0.0)
+                .put("messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", "You are a voice dictation autocorrect engine. Return only the corrected text. No explanations, no quotes, no markdown, no reasoning."))
+                    .put(JSONObject().put("role", "user").put("content", "$task\n$languageHint\nReturn only the corrected text.\n\nText:\n$text")))
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val resp = stream?.bufferedReader()?.readText().orEmpty()
+            if (code !in 200..299 || !resp.trimStart().startsWith("{")) throw RuntimeException("OpenRouter HTTP $code: ${resp.take(180)}")
+            val json = JSONObject(resp)
+            val fixed = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content")?.trim().orEmpty()
+            fixed.removeSurrounding("\"").trim().ifBlank { text }
+        } catch (t: Throwable) {
+            Log.w("QwenKeyboard", "OpenRouter correction failed; using fallback", t)
+            if (punctuate) addRulePunctuationFallback(text) else text
         }
     }
 
