@@ -99,8 +99,8 @@ class QwenVoiceInputMethodService : InputMethodService() {
     private var voiceAutoPunctuation = false
     private var voicePunctuationMode = "off" // off, rules, cloud_ai
     private var voiceAiTextCorrectionEnabled = false
-    private var openRouterApiKey = ""
-    private var openRouterModel = "qwen/qwen3-next-80b-a3b-instruct:free"
+    private var alibabaApiKey = ""
+    private var alibabaModel = "qwen-plus"
     private var previewModeEnabled = false
     private var displayAwareMode = false
     private var keyboardSizeMode = "normal" // compact, normal, tall
@@ -264,14 +264,9 @@ class QwenVoiceInputMethodService : InputMethodService() {
         if (voicePunctuationMode !in listOf("off", "rules", "cloud_ai")) voicePunctuationMode = if (voiceAutoPunctuation) "rules" else "off"
         voiceAutoPunctuation = voicePunctuationMode != "off"
         voiceAiTextCorrectionEnabled = p.getBoolean("voice_ai_text_correction", false)
-        openRouterApiKey = p.getString("openrouter_api_key", "") ?: ""
-        openRouterModel = p.getString("openrouter_model", "qwen/qwen3-next-80b-a3b-instruct:free") ?: "qwen/qwen3-next-80b-a3b-instruct:free"
-        if (openRouterModel !in listOf(
-                "qwen/qwen3-next-80b-a3b-instruct:free",
-                "meta-llama/llama-3.3-70b-instruct:free",
-                "nousresearch/hermes-3-llama-3.1-405b:free",
-                "google/gemma-4-26b-a4b-it:free"
-            )) openRouterModel = "qwen/qwen3-next-80b-a3b-instruct:free"
+        alibabaApiKey = p.getString("alibaba_modelstudio_api_key", "") ?: ""
+        alibabaModel = p.getString("alibaba_modelstudio_model", "qwen-plus") ?: "qwen-plus"
+        if (alibabaModel !in listOf("qwen-plus", "qwen-turbo", "qwen-flash", "qwen-max")) alibabaModel = "qwen-plus"
         handwritingAutoInsert = p.getBoolean("handwriting_auto_insert", true)
         handwritingAutoInsertDelayMs = p.getLong("handwriting_auto_insert_delay_ms", 900L).coerceIn(300L, 2000L)
         previewModeEnabled = p.getBoolean("preview_mode", false)
@@ -351,8 +346,8 @@ class QwenVoiceInputMethodService : InputMethodService() {
             .putBoolean("voice_auto_punctuation", voiceAutoPunctuation)
             .putString("voice_punctuation_mode", voicePunctuationMode)
             .putBoolean("voice_ai_text_correction", voiceAiTextCorrectionEnabled)
-            .putString("openrouter_api_key", openRouterApiKey)
-            .putString("openrouter_model", openRouterModel)
+            .putString("alibaba_modelstudio_api_key", alibabaApiKey)
+            .putString("alibaba_modelstudio_model", alibabaModel)
             .putBoolean("handwriting_auto_insert", handwritingAutoInsert)
             .putLong("handwriting_auto_insert_delay_ms", handwritingAutoInsertDelayMs.coerceIn(300L, 2000L))
             .putBoolean("preview_mode", previewModeEnabled)
@@ -863,24 +858,24 @@ class QwenVoiceInputMethodService : InputMethodService() {
             voiceAiTextCorrectionEnabled = it == "cloud_ai"
         })
         root.addView(choiceRow("Cloud AI model", listOf(
-            "qwen/qwen3-next-80b-a3b-instruct:free" to "Qwen3\nNext free",
-            "meta-llama/llama-3.3-70b-instruct:free" to "Llama 3.3\n70B free",
-            "nousresearch/hermes-3-llama-3.1-405b:free" to "Hermes\n405B free",
-            "google/gemma-4-26b-a4b-it:free" to "Gemma\nfree"
-        ), openRouterModel) { openRouterModel = it })
+            "qwen-plus" to "Qwen\nPlus",
+            "qwen-turbo" to "Qwen\nTurbo",
+            "qwen-flash" to "Qwen\nFlash",
+            "qwen-max" to "Qwen\nMax"
+        ), alibabaModel) { alibabaModel = it })
         root.addView(Button(this).apply {
-            text = if (openRouterApiKey.isBlank()) "Set OpenRouter key from clipboard" else "OpenRouter key set ✓ (tap to replace from clipboard)"
+            text = if (alibabaApiKey.isBlank()) "Set Alibaba Model Studio key from clipboard" else "Alibaba Model Studio key set ✓ (tap to replace)"
             textSize = 12f
             isAllCaps = false
             setOnClickListener {
                 val clip = (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.coerceToText(this@QwenVoiceInputMethodService)?.toString()?.trim().orEmpty()
-                if (clip.startsWith("sk-or-") || clip.length > 20) {
-                    openRouterApiKey = clip
+                if (clip.length > 20) {
+                    alibabaApiKey = clip
                     savePrefs()
-                    voiceStatusText = "OpenRouter key saved"
+                    voiceStatusText = "Alibaba Model Studio key saved"
                     refreshSettingsPanel()
                 } else {
-                    voiceStatusText = "Copy OpenRouter API key first"
+                    voiceStatusText = "Copy Alibaba Model Studio API key first"
                 }
             }
         }, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(3) })
@@ -1150,10 +1145,16 @@ Dee Keyboard full feature guide
 • Voice text is cleaned, converted and optionally punctuated according to the selected voice cleanup, punctuation and Chinese mode settings.
 • The status box shows source/model/chunk, e.g. “PC / Qwen_1.7B / 7s”; in landscape split mode this becomes a compact one-line status.
 
-10) Voice cleanup and punctuation
+10) Voice cleanup, punctuation and Cloud AI
 • Voice cleanup removes obvious duplicate fragments, repeated chunk overlap and common ASR cleanup artifacts.
-• Voice auto punctuation tries to add punctuation to dictated text automatically.
-• If you want exact raw ASR output, turn these off.
+• Auto correct: punctuation has Off, Offline rules and Cloud AI.
+• Offline rules are local and always available, but only do lightweight punctuation.
+• Cloud AI now uses Alibaba Cloud Model Studio / Qwen directly from the phone.
+• Paste your Alibaba Model Studio API key into the clipboard, then tap “Set Alibaba Model Studio key from clipboard”. The key stays on the phone in app preferences.
+• Cloud AI model choices are Qwen Plus, Qwen Turbo, Qwen Flash and Qwen Max.
+• Auto correct: text uses Cloud AI to fix obvious ASR word mistakes, capitalization, filler words and false starts after dictation stops.
+• If Alibaba Cloud AI fails or no key is set, the keyboard shows a status message and falls back to offline cleanup/punctuation instead of silently doing nothing.
+• If you want exact raw ASR output, turn punctuation/text correction off.
 • If dictated text feels too messy or repetitive, keep Voice cleanup on.
 
 11) Preview dictation and AI Fix
@@ -1173,9 +1174,11 @@ Dee Keyboard full feature guide
 • qwen_1_7b / qwen_0_6b are Qwen ASR routes.
 • sensevoice_yue_2025 is tuned for Cantonese/Yue-style speech.
 • Local models run on the phone after downloading the model files.
-• Local SenseVoice models are smaller and usually faster than large local Qwen.
-• Local Qwen 0.6B is available after downloading a larger model.
-• If a selected local model is missing, the app falls back to PC Qwen.
+• Local Moonshine Base is the recommended fast local English dictation mode.
+• Local Parakeet TDT is the heavier/more accurate local English dictation mode.
+• Local SenseVoice models are smaller Cantonese/Chinese-capable local options.
+• Local Qwen 0.6B is available after downloading a larger model, but is still experimental/heavy.
+• If a selected local model is missing or fails, the app falls back where possible instead of leaving dictation blank.
 
 13) Downloading / deleting local models
 • “Installed local models” shows models already on the phone and their approximate size.
@@ -1206,13 +1209,16 @@ Dee Keyboard full feature guide
 • Tap ☆ / ★ to pin or unpin an item.
 • The clipboard keeps a limited recent list, not every clipboard forever.
 
-16) Display aware mode and split keyboard
+16) Display aware mode, sizing and split keyboard
 • Default mode keeps the older fixed layout.
 • Display aware mode adapts keyboard/menu heights for different screen sizes.
-• It compacts the top buttons, keyboard height, handwriting pad and menu panels on smaller screens.
+• Keyboard height has Compact, Normal and Tall. Normal is the baseline; Compact is visibly shorter and Tall is visibly taller.
+• Key rows scale to fill the selected keyboard height, so custom sizing should not create a large dead black area at the bottom.
+• Key spacing changes the gap between keys: Tight, Normal or Comfortable.
+• Suggestion bar size changes recommendation row height: Small, Normal or Large.
 • It also reserves safe bottom space for gesture/3-button navigation bars.
-• Bottom buffer manually lifts the UI higher. Increase it if bottom buttons are covered.
-• Try 24dp, 36dp, 48dp, or 64dp depending on the phone/navigation bar.
+• Bottom buffer manually lifts the UI higher. Increase it if bottom buttons are covered; lower it if there is too much space below the keys.
+• Try 0dp, 12dp, 24dp, 36dp or 48dp depending on the phone/navigation bar.
 • Split keys controls split keyboard behavior: Off, On, or Auto wide.
 • Split keyboard applies only to the normal typing keyboard, not handwriting, voice, clipboard or settings panels.
 • In landscape split mode, the keyboard disables Android fullscreen extract mode so the target app remains visible.
@@ -1226,21 +1232,30 @@ Dee Keyboard full feature guide
 • 简中 converts supported Chinese text toward Simplified Chinese only. It does not apply the Cantonese Traditional translation.
 • This affects dictated/committed text, preview AI candidates and handwriting candidate conversion where supported.
 
-18) Learning upload
+18) Flow swipe input prototype
+• Flow swipe input is experimental and English keyboard only.
+• Enable “Flow swipe input prototype” in Settings.
+• Swipe across letter keys to draw a visible cyan trail.
+• High-confidence words commit automatically.
+• Uncertain matches show candidates in the recommendation bar instead of inserting a bad short fragment.
+• Flow uses both the crossed-letter sequence and geometry/path scoring, so diagonal swipes are judged by distance to intended key centers.
+• If there is no good match, it shows a “Flow: no match” status and does not type the first random key.
+
+19) Learning upload
 • “Upload learning to Dee library” is manual opt-in.
 • It sends learned words, learned corrections and preview correction logs to Dee’s private PC tunnel/library.
 • Purpose: future builds can include better personalized correction seeds.
 • It does not run just because learning is enabled; you must press the upload button.
 • Do not press it if you do not want your learned correction data exported.
 
-19) Status / debugging
+20) Status / debugging
 • Verbose status shows more detail about model, mode, chunks and processing.
 • Short status keeps the top status area quieter.
 • The idle status box shows voice source, model and chunk duration.
 • Short transient messages such as “Confirm forget”, “Forgot”, download errors or ASR errors can temporarily replace the idle status.
 • Error messages are shown in the status line when ASR/model/download operations fail.
 
-20) Practical tips
+21) Practical tips
 • For normal chat typing, keep suggestions + learning on, and autocorrect on only if it helps you.
 • For names/project terms, type the word then press Space or Enter once; it will be learned.
 • For next-word prediction, type naturally for a while; the keyboard learns your common phrase flow locally.
@@ -3435,15 +3450,18 @@ Dee Keyboard full feature guide
         val wantsPunctuation = voicePunctuationMode != "off"
         val wantsTextCorrection = voiceAiTextCorrectionEnabled
         return when {
-            voicePunctuationMode == "cloud_ai" || wantsTextCorrection -> applyOpenRouterVoiceCorrection(text, punctuate = wantsPunctuation, correctText = wantsTextCorrection)
+            voicePunctuationMode == "cloud_ai" || wantsTextCorrection -> applyAlibabaVoiceCorrection(text, punctuate = wantsPunctuation, correctText = wantsTextCorrection)
             voicePunctuationMode == "rules" -> addRulePunctuationFallback(text)
             else -> text
         }
     }
 
-    private fun applyOpenRouterVoiceCorrection(text: String, punctuate: Boolean, correctText: Boolean): String {
-        val key = openRouterApiKey.trim()
-        if (key.isBlank()) return offlineVoiceCorrectionFallback(text, punctuate, correctText)
+    private fun applyAlibabaVoiceCorrection(text: String, punctuate: Boolean, correctText: Boolean): String {
+        val key = alibabaApiKey.trim()
+        if (key.isBlank()) {
+            postUi { voiceStatusText = "Alibaba key missing; offline fallback" }
+            return offlineVoiceCorrectionFallback(text, punctuate, correctText)
+        }
         val languageHint = when {
             zhMode == "trad" -> "Output Traditional Chinese when the input is Chinese/Cantonese. Use Cantonese wording naturally where present, e.g. 係咪 not 系咪."
             zhMode == "simp" -> "Output Simplified Chinese when the input is Chinese/Mandarin. Preserve Cantonese wording if the input is Cantonese."
@@ -3473,44 +3491,26 @@ Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢
         val userPrompt = listOf(task, languageHint, punctuationRules, examples, "Return only the corrected text. No explanations.", "Text:\n$text")
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
-        val models = openRouterFallbackModels()
-        var lastError = ""
-        for (model in models) {
-            try {
-                postUi { voiceStatusText = "Cloud AI correcting… ${shortCloudModelLabel(model)}" }
-                val fixed = callOpenRouterCorrection(key, model, userPrompt).trim().removeSurrounding("\"").trim()
-                if (fixed.isNotBlank()) return fixed
-            } catch (t: Throwable) {
-                lastError = t.message.orEmpty().take(140)
-                Log.w("QwenKeyboard", "OpenRouter correction failed for $model", t)
-                continue
-            }
+        return try {
+            postUi { voiceStatusText = "Alibaba AI correcting… ${alibabaModelDisplay(alibabaModel)}" }
+            val fixed = callAlibabaModelStudioCorrection(key, alibabaModel, userPrompt).trim().removeSurrounding("\"").trim()
+            fixed.ifBlank { offlineVoiceCorrectionFallback(text, punctuate, correctText) }
+        } catch (t: Throwable) {
+            Log.w("QwenKeyboard", "Alibaba Model Studio correction failed", t)
+            postUi { voiceStatusText = "Alibaba AI failed; offline fallback: ${t.message.orEmpty().take(60)}" }
+            offlineVoiceCorrectionFallback(text, punctuate, correctText)
         }
-        postUi { voiceStatusText = "Cloud AI failed; offline fallback${if (lastError.isBlank()) "" else ": ${lastError.take(60)}"}" }
-        return offlineVoiceCorrectionFallback(text, punctuate, correctText)
     }
 
-    private fun openRouterFallbackModels(): List<String> {
-        val preferred = openRouterModel.ifBlank { "qwen/qwen3-next-80b-a3b-instruct:free" }
-        val fallbacks = listOf(
-            preferred,
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemma-4-26b-a4b-it:free",
-            "nousresearch/hermes-3-llama-3.1-405b:free"
-        )
-        return fallbacks.distinct()
+    private fun alibabaModelDisplay(model: String): String = when (model) {
+        "qwen-turbo" -> "Qwen Turbo"
+        "qwen-flash" -> "Qwen Flash"
+        "qwen-max" -> "Qwen Max"
+        else -> "Qwen Plus"
     }
 
-    private fun shortCloudModelLabel(model: String): String = when {
-        model.contains("qwen", true) -> "Qwen"
-        model.contains("llama", true) -> "Llama"
-        model.contains("gemma", true) -> "Gemma"
-        model.contains("hermes", true) -> "Hermes"
-        else -> "Cloud"
-    }
-
-    private fun callOpenRouterCorrection(key: String, model: String, userPrompt: String): String {
-        val url = java.net.URL("https://openrouter.ai/api/v1/chat/completions")
+    private fun callAlibabaModelStudioCorrection(key: String, model: String, userPrompt: String): String {
+        val url = java.net.URL("https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
         val conn = (url.openConnection() as java.net.HttpURLConnection)
         conn.requestMethod = "POST"
         conn.connectTimeout = 15_000
@@ -3518,8 +3518,6 @@ Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢
         conn.doOutput = true
         conn.setRequestProperty("Authorization", "Bearer $key")
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-        conn.setRequestProperty("HTTP-Referer", "https://github.com/yatbond/qwen-keyboard")
-        conn.setRequestProperty("X-Title", "Dee Keyboard")
         val body = JSONObject()
             .put("model", model)
             .put("temperature", 0.0)
@@ -3530,7 +3528,7 @@ Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val resp = stream?.bufferedReader()?.readText().orEmpty()
-        if (code !in 200..299 || !resp.trimStart().startsWith("{")) throw RuntimeException("OpenRouter HTTP $code")
+        if (code !in 200..299 || !resp.trimStart().startsWith("{")) throw RuntimeException("Alibaba HTTP $code")
         val json = JSONObject(resp)
         return json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty()
     }

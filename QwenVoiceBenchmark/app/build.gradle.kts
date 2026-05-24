@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 234
-        versionName = "4.8.6-cloud-ai-fallbacks"
+        versionCode = 235
+        versionName = "4.8.7-alibaba-modelstudio-ai"
     }
 
 
