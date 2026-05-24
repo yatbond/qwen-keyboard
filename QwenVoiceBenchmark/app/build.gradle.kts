@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 232
-        versionName = "4.8.4-keyboard-height-tuning"
+        versionCode = 233
+        versionName = "4.8.5-key-height-fill-fix"
     }
 
 

@@ -1914,10 +1914,19 @@ Dee Keyboard full feature guide
         }
 
         private fun keyboardScaleY(): Float {
-            if (!displayAwareMode && !previewModeEnabled) return 1f
             if (height <= 0) return 1f
-            val minScale = if (isLandscapeLayout()) 0.42f else 0.68f
-            return (height / dp(274).toFloat()).coerceIn(minScale, 1.08f)
+            val designHeight = dp(278).toFloat()
+            val minScale = when {
+                isLandscapeLayout() -> 0.42f
+                keyboardSizeMode == "compact" -> 0.70f
+                else -> 0.68f
+            }
+            val maxScale = when (keyboardSizeMode) {
+                "tall" -> 1.36f
+                "compact" -> 0.92f
+                else -> 1.08f
+            }
+            return (height / designHeight).coerceIn(minScale, maxScale)
         }
 
         private fun keyboardScaleX(): Float {
