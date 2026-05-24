@@ -3345,20 +3345,31 @@ Dee Keyboard full feature guide
                 zhMode == "simp" -> "Output Simplified Chinese when the input is Chinese/Mandarin. Preserve Cantonese wording if the input is Cantonese."
                 else -> "Preserve the input language(s). Do not translate. For Chinese/Cantonese, use natural Chinese punctuation and normalize obvious Cantonese character mistakes such as 系咪 -> 係咪 when appropriate. For English, use English punctuation and capitalization."
             }
+            val punctuationRules = if (punctuate) """
+Punctuation rules:
+- Punctuate the full passage by meaning, not by ASR chunks.
+- Do not put a period/full stop after a stray conjunction or discourse marker such as "and", "then", "and then", "跟住", "之後".
+- Prefer commas for continuing thoughts; use a full stop only when the thought is complete.
+- Use ? only for real questions. In Cantonese, question patterns include 未, 係咪, 有冇, 去唔去, 可唔可以, 點解, 幾時, 邊個, 邊度.
+- Do not add random question marks just because the sentence ends with 啊/呀/喇/啦/呢/咧.
+- Mixed Chinese/English dictation is allowed; punctuate each language naturally without translating.
+""".trimIndent() else ""
             val task = when {
-                punctuate && correctText -> "Clean this voice dictation transcript: add natural punctuation/capitalization, remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Preserve meaning, language mix, and speaker intent. Do not add new ideas."
-                punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording, remove words, or change meaning."
+                punctuate && correctText -> "Clean this voice dictation transcript and punctuate it naturally: add punctuation/capitalization, remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Preserve meaning, language mix, and speaker intent. Do not add new ideas."
+                punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording, remove words, or change meaning. Follow the punctuation rules carefully."
                 correctText -> "Clean this voice dictation transcript without changing meaning: remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Do not translate or add new ideas."
                 else -> "Return the text unchanged."
             }
-            val examples = if (correctText) """
-Examples of allowed cleanup:
-Input: Let's go to uh play soccer tomorrow, and then we may actually go have a debate. Lesson and. Then we can go back home and chill.
-Output: Let's go play soccer tomorrow, and then maybe we can have a debate. Then we can go back home and chill.
-Input: 跟住之後系咪去踢波咧
-Output: 跟住之後係咪去踢波呢？
-""".trimIndent() else ""
-            val userPrompt = listOf(task, languageHint, examples, "Return only the corrected text. No explanations.", "Text:\n$text")
+            val examples = """
+Examples:
+Input: 食咗飯未啊 聽日去唔去街啊 跟住之後系咪去踢波咧 Let's go to uh play soccer tomorrow and then we may actually go have a debate Lesson and Then we can go back home and chill
+Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢？ Let's go play soccer tomorrow, and then maybe we can have a debate. Then we can go back home and chill.
+Input: I think we should go tomorrow and then maybe after lunch we can meet them
+Output: I think we should go tomorrow, and then maybe after lunch we can meet them.
+Input: 今日好攰啊跟住返到屋企就瞓覺啦
+Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
+""".trimIndent()
+            val userPrompt = listOf(task, languageHint, punctuationRules, examples, "Return only the corrected text. No explanations.", "Text:\n$text")
                 .filter { it.isNotBlank() }
                 .joinToString("\n\n")
             val body = JSONObject()
