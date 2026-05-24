@@ -1,0 +1,49 @@
+# Build outputs
+**/build/
+.gradle/
+.local.properties
+*.apk
+*.aab
+*.aar
+*.hprof
+java_pid*.hprof
+
+# Generated artifacts / large models
+output/
+models/
+third_party/
+qwen-chat-*.apk
+
+# Runtime/private workspace state
+.openclaw/
+memory/
+Log/
+*.log
+*.tmp
+
+# Secrets / local config
+.env
+*.env
+*token*
+*Token*
+*.key
+*.pem
+*.p12
+*.jks
+keystore.properties
+local.properties
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+
+# Python
+.venv*/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
