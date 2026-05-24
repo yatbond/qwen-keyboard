@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 217
-        versionName = "4.5.0-jiufang-pad-sucheng"
+        versionCode = 218
+        versionName = "4.6.0-final-ai-punctuation"
     }
 
 

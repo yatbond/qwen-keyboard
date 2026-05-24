@@ -3176,6 +3176,7 @@ Dee Keyboard full feature guide
         val baseUrl = prefs.getString("url", "https://voice.dee-photography.com") ?: "https://voice.dee-photography.com"
         val token = prefs.getString("token", "") ?: ""
         val client = if (usePhoneLocal) null else PcAsrClient(baseUrl = baseUrl, token = token, engine = engineName, chunkSec = 0)
+        val textFixClient = PcAsrClient(baseUrl = baseUrl, token = token, engine = engineName, chunkSec = 0)
         val df = DecimalFormat("0.0")
         while (running.get() || runQueue.isNotEmpty()) {
             val chunk = runQueue.poll(500, TimeUnit.MILLISECONDS) ?: continue
@@ -3202,14 +3203,12 @@ Dee Keyboard full feature guide
                     finalDetail = fallback.second
                 }
                 var cleanedText = postProcessVoiceText(finalRawText.trim())
-                cleanedText = applyPcPunctuationIfSelected(cleanedText, client)
                 cleanedText = convertChinese(cleanedText)
                 if (engineName == "phone_qwen_0_6b" && cleanedText.isBlank()) {
                     val fallback = recoverBlankLocalQwen(chunk)
                     finalRawText = fallback.first
                     finalDetail = fallback.second
                     cleanedText = postProcessVoiceText(finalRawText.trim())
-                    cleanedText = applyPcPunctuationIfSelected(cleanedText, client)
                     cleanedText = convertChinese(cleanedText)
                 }
                 val elapsed = System.currentTimeMillis() - started
@@ -3234,6 +3233,7 @@ Dee Keyboard full feature guide
                 chunk.file.delete()
             }
         }
+        finalizeVoicePunctuationAfterChunks(textFixClient)
         postUi {
             micButton.text = "Start Dictation"
             if (::recordButton.isInitialized) recordButton.text = "●"
@@ -3241,7 +3241,44 @@ Dee Keyboard full feature guide
         }
     }
 
+    private fun finalizeVoicePunctuationAfterChunks(client: PcAsrClient?) {
+        val originalWithSpace = buffer.toString()
+        val original = originalWithSpace.trim()
+        if (original.isBlank() || voicePunctuationMode == "off") return
+        val fixed = applyFinalVoicePunctuation(original, client).trim()
+        if (fixed.isBlank() || fixed == original) return
+        if (previewModeEnabled) {
+            buffer.clear(); buffer.append(fixed).append(' ')
+            previewLastInsertedText = fixed
+            postUi {
+                if (::previewInput.isInitialized) {
+                    previewInput.setText(fixed)
+                    previewInput.setSelection(previewInput.text.length)
+                }
+                transcript.text = fixed
+                voiceStatusText = if (voicePunctuationMode == "pc_ai") "AI punctuation applied" else "Punctuation applied"
+            }
+        } else {
+            val deleteChars = originalWithSpace.length
+            buffer.clear(); buffer.append(fixed).append(' ')
+            postUi {
+                currentInputConnection?.apply {
+                    deleteSurroundingText(deleteChars, 0)
+                    commitText(fixed + " ", 1)
+                }
+                transcript.text = fixed
+                voiceStatusText = if (voicePunctuationMode == "pc_ai") "AI punctuation applied" else "Punctuation applied"
+            }
+        }
+    }
 
+    private fun applyFinalVoicePunctuation(text: String, client: PcAsrClient?): String {
+        return when (voicePunctuationMode) {
+            "pc_ai" -> applyPcPunctuationIfSelected(text, client)
+            "rules" -> addRulePunctuationFallback(text)
+            else -> text
+        }
+    }
 
     private fun recoverBlankLocalQwen(chunk: LiveChunk): Pair<String, String> {
         Log.w("QwenKeyboard", "Local Qwen 0.6B returned blank; trying fallback for ${chunk.file.name} durationMs=${chunk.durationMs}")
@@ -3850,9 +3887,9 @@ Dee Keyboard full feature guide
     }
 
     private fun maybeAutoPunctuate(text: String): String {
-        if (voicePunctuationMode != "rules" || text.isBlank()) return text
-        val last = text.last()
-        return if (last in ".?!。？！") text else "$text."
+        // Do not punctuate individual live chunks. A chunk is not a sentence.
+        // Final punctuation is applied once after all queued chunks finish.
+        return text
     }
 
     private fun applyPcPunctuationIfSelected(text: String, client: PcAsrClient?): String {
