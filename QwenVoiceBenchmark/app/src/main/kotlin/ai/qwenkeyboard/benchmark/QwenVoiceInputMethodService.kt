@@ -4269,7 +4269,7 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
     private data class FlowRank(val candidate: String, val score: Int, val coverage: Float, val orderedCoverage: Float)
 
     private fun bestFlowGuess(signature: String): String? {
-        val ranked = flowRanks(signature, 3)
+        val ranked = flowRanks(signature, 5, forSuggestions = false)
         val best = ranked.firstOrNull() ?: return null
         val second = ranked.getOrNull(1)
         val word = compactFlowToken(best.candidate.lowercase())
@@ -4278,9 +4278,9 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
         return if (isStrong && hasMargin) best.candidate else null
     }
 
-    private fun flowGuesses(signature: String, limit: Int = 3): List<String> = flowRanks(signature, limit).map { it.candidate }
+    private fun flowGuesses(signature: String, limit: Int = 3): List<String> = flowRanks(signature, limit, forSuggestions = true).map { it.candidate }
 
-    private fun flowRanks(signature: String, limit: Int = 3): List<FlowRank> {
+    private fun flowRanks(signature: String, limit: Int = 3, forSuggestions: Boolean = false): List<FlowRank> {
         val sig = compactFlowToken(signature)
         if (sig.length < 2) return emptyList()
         val first = sig.firstOrNull() ?: return emptyList()
@@ -4300,7 +4300,11 @@ Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
                     val coverage = flowCoverage(sig, word)
                     val orderedCoverage = flowOrderedCoverage(sig, word)
                     val score = flowScore(sig, word)
-                    val allowed = coverage >= 0.55f && orderedCoverage >= 0.45f && score <= maxOf(16, word.length + 9)
+                    val allowed = if (forSuggestions) {
+                        coverage >= 0.30f && orderedCoverage >= 0.25f && score <= maxOf(34, word.length + 22)
+                    } else {
+                        coverage >= 0.55f && orderedCoverage >= 0.45f && score <= maxOf(16, word.length + 9)
+                    }
                     if (allowed) FlowRank(candidate, score - word.length.coerceAtMost(8) / 2, coverage, orderedCoverage) else null
                 }
             }
