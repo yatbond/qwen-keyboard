@@ -100,7 +100,7 @@ class QwenVoiceInputMethodService : InputMethodService() {
     private var voicePunctuationMode = "off" // off, rules, cloud_ai
     private var voiceAiTextCorrectionEnabled = false
     private var alibabaApiKey = ""
-    private var alibabaModel = "qwen-plus"
+    private var alibabaModel = "qwen3.6-plus"
     private var previewModeEnabled = false
     private var displayAwareMode = false
     private var keyboardSizeMode = "normal" // compact, normal, tall
@@ -265,8 +265,8 @@ class QwenVoiceInputMethodService : InputMethodService() {
         voiceAutoPunctuation = voicePunctuationMode != "off"
         voiceAiTextCorrectionEnabled = p.getBoolean("voice_ai_text_correction", false)
         alibabaApiKey = p.getString("alibaba_modelstudio_api_key", "") ?: ""
-        alibabaModel = p.getString("alibaba_modelstudio_model", "qwen-plus") ?: "qwen-plus"
-        if (alibabaModel !in listOf("qwen-plus", "qwen-turbo", "qwen-flash", "qwen-max")) alibabaModel = "qwen-plus"
+        alibabaModel = p.getString("alibaba_modelstudio_model", "qwen3.6-plus") ?: "qwen3.6-plus"
+        if (alibabaModel !in listOf("qwen3.6-plus", "qwen3.6-flash")) alibabaModel = "qwen3.6-plus"
         handwritingAutoInsert = p.getBoolean("handwriting_auto_insert", true)
         handwritingAutoInsertDelayMs = p.getLong("handwriting_auto_insert_delay_ms", 900L).coerceIn(300L, 2000L)
         previewModeEnabled = p.getBoolean("preview_mode", false)
@@ -858,10 +858,8 @@ class QwenVoiceInputMethodService : InputMethodService() {
             voiceAiTextCorrectionEnabled = it == "cloud_ai"
         })
         root.addView(choiceRow("Cloud AI model", listOf(
-            "qwen-plus" to "Qwen\nPlus",
-            "qwen-turbo" to "Qwen\nTurbo",
-            "qwen-flash" to "Qwen\nFlash",
-            "qwen-max" to "Qwen\nMax"
+            "qwen3.6-plus" to "Qwen3.6\nPlus",
+            "qwen3.6-flash" to "Qwen3.6\nFlash"
         ), alibabaModel) { alibabaModel = it })
         root.addView(Button(this).apply {
             text = if (alibabaApiKey.isBlank()) "Set Alibaba Model Studio key from clipboard" else "Alibaba Model Studio key set ✓ (tap to replace)"
@@ -1151,8 +1149,8 @@ Dee Keyboard full feature guide
 • Offline rules are local and always available, but only do lightweight punctuation.
 • Cloud AI now uses Alibaba Cloud Model Studio / Qwen directly from the phone.
 • Paste your Alibaba Model Studio API key into the clipboard, then tap “Set Alibaba Model Studio key from clipboard”. The key stays on the phone in app preferences.
-• Cloud AI model choices are Qwen Plus, Qwen Turbo, Qwen Flash and Qwen Max.
-• Auto correct: text uses Cloud AI to fix obvious ASR word mistakes, capitalization, filler words and false starts after dictation stops.
+• Cloud AI model choices are Qwen3.6 Plus and Qwen3.6 Flash for the Hong Kong workspace. Plus is better quality; Flash is faster/cheaper.
+• Auto correct: text uses Cloud AI to fix obvious ASR word mistakes, capitalization and Chinese character mistakes after dictation stops. It should preserve spoken fillers such as um/uh/ah/ar rather than making the sentence overly clean.
 • If Alibaba Cloud AI fails or no key is set, the keyboard shows a status message and falls back to offline cleanup/punctuation instead of silently doing nothing.
 • If you want exact raw ASR output, turn punctuation/text correction off.
 • If dictated text feels too messy or repetitive, keep Voice cleanup on.
@@ -3463,32 +3461,41 @@ Dee Keyboard full feature guide
             return offlineVoiceCorrectionFallback(text, punctuate, correctText)
         }
         val languageHint = when {
-            zhMode == "trad" -> "Output Traditional Chinese when the input is Chinese/Cantonese. Use Cantonese wording naturally where present, e.g. 係咪 not 系咪."
-            zhMode == "simp" -> "Output Simplified Chinese when the input is Chinese/Mandarin. Preserve Cantonese wording if the input is Cantonese."
-            else -> "Preserve the input language(s). Do not translate. For Chinese/Cantonese, use natural Chinese punctuation and normalize obvious Cantonese character mistakes such as 系咪 -> 係咪 when appropriate. For English, use English punctuation and capitalization."
+            zhMode == "trad" -> "Chinese output rule: use Traditional Chinese. If the speech is Cantonese, keep it Cantonese-focused and colloquial: prefer 係咪, 唔係, 冇, 嘅, 咗, 嚟, 啲, etc. Do not convert Cantonese into Mandarin-style wording."
+            zhMode == "simp" -> "Chinese output rule: use Simplified Chinese characters. Preserve Cantonese wording if that is what was spoken, but write it in Simplified form where applicable."
+            else -> "Chinese output rule: as spoken / standard. Preserve the spoken language and original script as much as possible. Use standard/common Chinese characters only for obvious ASR character mistakes. Do not force Traditional or Simplified conversion."
         }
+        val preservationRules = """
+Preservation rules:
+- Keep the transcript sounding like the person who spoke it.
+- Keep spoken fillers and discourse particles such as um, uh, er, ah, ar, 嗯, 啊, 呀, 啦, 喇, 咧.
+- Do not remove fillers, false starts, or casual phrasing unless there is an obvious duplicated ASR glitch.
+- Do not paraphrase, summarize, translate, or make the speaker sound more formal.
+- Fix only obvious ASR spelling/capitalization/character mistakes.
+""".trimIndent()
         val punctuationRules = if (punctuate) """
 Punctuation rules:
-- Punctuate the full passage by meaning, not by ASR chunks.
+- Add punctuation at proper places by meaning, not by ASR chunks.
 - Prefer commas for continuing thoughts; use a full stop only when the thought is complete.
 - Use ? only for real questions. In Cantonese, question patterns include 未, 係咪, 有冇, 去唔去, 可唔可以, 點解, 幾時, 邊個, 邊度.
 - Do not add random question marks just because the sentence ends with 啊/呀/喇/啦/呢/咧.
 - Mixed Chinese/English dictation is allowed; punctuate each language naturally without translating.
 """.trimIndent() else ""
         val task = when {
-            punctuate && correctText -> "Clean this voice dictation transcript and punctuate it naturally: add punctuation/capitalization, remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Preserve meaning, language mix, and speaker intent. Do not add new ideas."
-            punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording, remove words, or change meaning. Follow the punctuation rules carefully."
-            correctText -> "Clean this voice dictation transcript without changing meaning: remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Do not translate or add new ideas."
+            punctuate && correctText -> "Format this voice dictation transcript: preserve spoken wording/fillers, add punctuation/capitalization, and fix obvious ASR spelling or Chinese character mistakes only."
+            punctuate -> "Add punctuation and capitalization only while preserving every spoken word/filler."
+            correctText -> "Fix obvious ASR spelling/capitalization/Chinese character mistakes only while preserving spoken wording/fillers."
             else -> "Return the text unchanged."
         }
         val examples = """
 Examples:
-Input: WELL LETS TEST THIS MODEL NOW TT'S NOT BAD NO PUNCTUTION NOR NOTHING 嗯
-Output: Well, let's test this model now. It's not bad; no punctuation nor nothing. 嗯。
-Input: 食咗飯未啊 聽日去唔去街啊 跟住之後系咪去踢波咧 Let's go to uh play soccer tomorrow and then we may actually go have a debate Lesson and Then we can go back home and chill
-Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢？ Let's go play soccer tomorrow, and then maybe we can have a debate. Then we can go back home and chill.
+Input: um I think ah we should go tomorrow and then maybe after lunch we can meet them uh and then we can go back home and chill
+Output: Um, I think ah, we should go tomorrow, and then maybe after lunch we can meet them, uh, and then we can go back home and chill.
+Input: 食咗飯未啊 聽日去唔去街啊 跟住之後系咪去踢波咧
+Traditional Cantonese output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波咧？
+Simplified output: 食咗饭未啊？听日去唔去街啊？跟住之后系咪去踢波咧？
 """.trimIndent()
-        val userPrompt = listOf(task, languageHint, punctuationRules, examples, "Return only the corrected text. No explanations.", "Text:\n$text")
+        val userPrompt = listOf(task, preservationRules, languageHint, punctuationRules, examples, "Return only the final transcript text. No explanations.", "Text:\n$text")
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
         return try {
@@ -3503,10 +3510,8 @@ Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢
     }
 
     private fun alibabaModelDisplay(model: String): String = when (model) {
-        "qwen-turbo" -> "Qwen Turbo"
-        "qwen-flash" -> "Qwen Flash"
-        "qwen-max" -> "Qwen Max"
-        else -> "Qwen Plus"
+        "qwen3.6-flash" -> "Qwen3.6 Flash"
+        else -> "Qwen3.6 Plus"
     }
 
     private fun callAlibabaModelStudioCorrection(key: String, model: String, userPrompt: String): String {
@@ -3521,6 +3526,7 @@ Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢
         val body = JSONObject()
             .put("model", model)
             .put("temperature", 0.0)
+            .put("enable_thinking", false)
             .put("messages", JSONArray()
                 .put(JSONObject().put("role", "system").put("content", "You are a conservative voice dictation cleanup engine for Cantonese, Chinese, and English. Return only the corrected transcript. No explanations, no quotes, no markdown, no reasoning. Preserve meaning and language mix."))
                 .put(JSONObject().put("role", "user").put("content", userPrompt)))
@@ -3541,8 +3547,7 @@ Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢
                 .replace(Regex("(?i)\\bpunctution\\b"), "punctuation")
                 .replace(Regex("(?i)\\bpuncutation\\b"), "punctuation")
                 .replace(Regex("(?i)\\blets\\b"), "let's")
-                .replace(Regex("(?i)\\buh\\b"), "")
-                .replace("系咪", "係咪")
+                .replace("系咪", if (zhMode == "trad") "係咪" else "系咪")
                 .replace(Regex("\\s+"), " ")
                 .trim()
             if (t == t.uppercase() && t.any { it.isLetter() }) t = t.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
