@@ -3341,22 +3341,32 @@ Dee Keyboard full feature guide
             conn.setRequestProperty("HTTP-Referer", "https://github.com/yatbond/qwen-keyboard")
             conn.setRequestProperty("X-Title", "Dee Keyboard")
             val languageHint = when {
-                zhMode == "trad" -> "Use Traditional Chinese punctuation and keep Traditional Chinese if the text is Chinese."
-                zhMode == "simp" -> "Use Simplified Chinese punctuation and keep Simplified Chinese if the text is Chinese."
-                else -> "Preserve the input language. For Chinese/Cantonese, use natural Chinese punctuation. For English, use English punctuation and capitalization."
+                zhMode == "trad" -> "Output Traditional Chinese when the input is Chinese/Cantonese. Use Cantonese wording naturally where present, e.g. 係咪 not 系咪."
+                zhMode == "simp" -> "Output Simplified Chinese when the input is Chinese/Mandarin. Preserve Cantonese wording if the input is Cantonese."
+                else -> "Preserve the input language(s). Do not translate. For Chinese/Cantonese, use natural Chinese punctuation and normalize obvious Cantonese character mistakes such as 系咪 -> 係咪 when appropriate. For English, use English punctuation and capitalization."
             }
             val task = when {
-                punctuate && correctText -> "Add natural punctuation/capitalization and lightly correct obvious ASR dictation mistakes. Preserve meaning and wording as much as possible."
-                punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording or meaning."
-                correctText -> "Lightly correct obvious ASR dictation mistakes only. Do not add unnecessary punctuation or rewrite meaning."
+                punctuate && correctText -> "Clean this voice dictation transcript: add natural punctuation/capitalization, remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Preserve meaning, language mix, and speaker intent. Do not add new ideas."
+                punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording, remove words, or change meaning."
+                correctText -> "Clean this voice dictation transcript without changing meaning: remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Do not translate or add new ideas."
                 else -> "Return the text unchanged."
             }
+            val examples = if (correctText) """
+Examples of allowed cleanup:
+Input: Let's go to uh play soccer tomorrow, and then we may actually go have a debate. Lesson and. Then we can go back home and chill.
+Output: Let's go play soccer tomorrow, and then maybe we can have a debate. Then we can go back home and chill.
+Input: 跟住之後系咪去踢波咧
+Output: 跟住之後係咪去踢波呢？
+""".trimIndent() else ""
+            val userPrompt = listOf(task, languageHint, examples, "Return only the corrected text. No explanations.", "Text:\n$text")
+                .filter { it.isNotBlank() }
+                .joinToString("\n\n")
             val body = JSONObject()
                 .put("model", openRouterModel.ifBlank { "qwen/qwen3-next-80b-a3b-instruct:free" })
                 .put("temperature", 0.0)
                 .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a voice dictation autocorrect engine. Return only the corrected text. No explanations, no quotes, no markdown, no reasoning."))
-                    .put(JSONObject().put("role", "user").put("content", "$task\n$languageHint\nReturn only the corrected text.\n\nText:\n$text")))
+                    .put(JSONObject().put("role", "system").put("content", "You are a conservative voice dictation cleanup engine for Cantonese, Chinese, and English. Return only the corrected transcript. No explanations, no quotes, no markdown, no reasoning. Preserve meaning and language mix. Remove obvious dictation noise when text correction is requested."))
+                    .put(JSONObject().put("role", "user").put("content", userPrompt)))
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream

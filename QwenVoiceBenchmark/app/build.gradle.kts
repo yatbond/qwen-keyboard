@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 220
-        versionName = "4.7.2-clean-autocorrect-ui"
+        versionCode = 221
+        versionName = "4.7.3-better-ai-cleanup"
     }
 
 
