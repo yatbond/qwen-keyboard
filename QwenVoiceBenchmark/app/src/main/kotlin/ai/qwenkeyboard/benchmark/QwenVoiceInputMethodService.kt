@@ -1799,6 +1799,7 @@ Dee Keyboard full feature guide
         private var flowDistance = 0f
         private var lastFlowX = 0f
         private var lastFlowY = 0f
+        private var flowGestureActive = false
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
@@ -2071,9 +2072,10 @@ Dee Keyboard full feature guide
                     downKey = nearestKey(event.x, event.y)
                     flowKeys.clear()
                     flowDistance = 0f
+                    flowGestureActive = false
                     lastFlowX = event.x
                     lastFlowY = event.y
-                    downKey?.action?.let { if (flowInputEnabled && isFlowLetterKey(it)) flowKeys.add(it.lowercase()) }
+                    downKey?.action?.let { if (flowInputEnabled && !symbols && keyboardLanguageMode == "en" && isFlowLetterKey(it)) flowKeys.add(it.lowercase()) }
                     if (downKey?.action == "VOICE_HOLD") {
                         holdVoiceFromKeyboard = true
                         if (!running.get()) startDictation()
@@ -2107,6 +2109,11 @@ Dee Keyboard full feature guide
                         flowDistance += kotlin.math.sqrt(dx * dx + dy * dy)
                         lastFlowX = event.x
                         lastFlowY = event.y
+                        if (flowDistance > dp(18)) {
+                            flowGestureActive = true
+                            repeatRunnable?.let { repeatHandler.removeCallbacks(it) }
+                            repeatRunnable = null
+                        }
                         nearestKey(event.x, event.y)?.action?.let { action ->
                             if (isFlowLetterKey(action)) {
                                 val k = action.lowercase()
@@ -2114,7 +2121,7 @@ Dee Keyboard full feature guide
                             }
                         }
                     }
-                    if (swipeDeleteEnabled && !didSwipeDelete && touchDownX - event.x > dp(70) && kotlin.math.abs(event.y - touchDownY) < dp(85)) {
+                    if (!flowGestureActive && swipeDeleteEnabled && !didSwipeDelete && touchDownX - event.x > dp(70) && kotlin.math.abs(event.y - touchDownY) < dp(85)) {
                         didSwipeDelete = true
                         repeatRunnable?.let { repeatHandler.removeCallbacks(it) }
                         repeatRunnable = null
@@ -2129,22 +2136,23 @@ Dee Keyboard full feature guide
                         if (running.get()) stopDictation()
                         holdVoiceFromKeyboard = false
                         setIdleStatus(if (verboseMode) "Qwen Keyboard" else "")
-                    } else if (!didSwipeDelete && !repeatFired && key != null) {
+                    } else if (!didSwipeDelete && key != null) {
                         val flowCandidate = flowCandidateFromPath()
                         if (flowCandidate != null) {
                             commitText(flowCandidate)
                             commitText(" ")
                             voiceStatusText = "Flow: $flowCandidate"
-                        } else {
+                        } else if (!repeatFired) {
                             performCanvasKey(key)
                         }
                     }
-                    flowKeys.clear(); flowDistance = 0f
+                    flowKeys.clear(); flowDistance = 0f; flowGestureActive = false
                     downKey = null; invalidate(); return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     repeatRunnable?.let { repeatHandler.removeCallbacks(it) }; repeatRunnable = null
                     if (downKey?.action == "VOICE_HOLD") { if (running.get()) stopDictation(); holdVoiceFromKeyboard = false }
+                    flowKeys.clear(); flowDistance = 0f; flowGestureActive = false
                     downKey = null; invalidate(); return true
                 }
             }
@@ -2155,7 +2163,7 @@ Dee Keyboard full feature guide
 
         private fun flowCandidateFromPath(): String? {
             if (!flowInputEnabled || keyboardLanguageMode != "en" || symbols) return null
-            if (flowDistance < dp(90) || flowKeys.size < 3) return null
+            if (flowDistance < dp(35) || flowKeys.size < 2) return null
             val signature = flowKeys.joinToString("")
             val compact = signature.replace(Regex("(.)\\1+"), "$1")
             val candidates = flowWordMap[compact].orEmpty() + flowWordMap[signature].orEmpty()

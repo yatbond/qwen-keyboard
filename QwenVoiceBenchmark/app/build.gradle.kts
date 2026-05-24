@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 222
-        versionName = "4.7.4-better-ai-punctuation"
+        versionCode = 223
+        versionName = "4.7.5-fix-flow-swipe"
     }
 
 
