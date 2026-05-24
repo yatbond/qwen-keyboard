@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 233
-        versionName = "4.8.5-key-height-fill-fix"
+        versionCode = 234
+        versionName = "4.8.6-cloud-ai-fallbacks"
     }
 
 

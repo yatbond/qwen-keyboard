@@ -3443,68 +3443,114 @@ Dee Keyboard full feature guide
 
     private fun applyOpenRouterVoiceCorrection(text: String, punctuate: Boolean, correctText: Boolean): String {
         val key = openRouterApiKey.trim()
-        if (key.isBlank()) return if (punctuate) addRulePunctuationFallback(text) else text
-        return try {
-            val url = java.net.URL("https://openrouter.ai/api/v1/chat/completions")
-            val conn = (url.openConnection() as java.net.HttpURLConnection)
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 90_000
-            conn.doOutput = true
-            conn.setRequestProperty("Authorization", "Bearer $key")
-            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("HTTP-Referer", "https://github.com/yatbond/qwen-keyboard")
-            conn.setRequestProperty("X-Title", "Dee Keyboard")
-            val languageHint = when {
-                zhMode == "trad" -> "Output Traditional Chinese when the input is Chinese/Cantonese. Use Cantonese wording naturally where present, e.g. 係咪 not 系咪."
-                zhMode == "simp" -> "Output Simplified Chinese when the input is Chinese/Mandarin. Preserve Cantonese wording if the input is Cantonese."
-                else -> "Preserve the input language(s). Do not translate. For Chinese/Cantonese, use natural Chinese punctuation and normalize obvious Cantonese character mistakes such as 系咪 -> 係咪 when appropriate. For English, use English punctuation and capitalization."
-            }
-            val punctuationRules = if (punctuate) """
+        if (key.isBlank()) return offlineVoiceCorrectionFallback(text, punctuate, correctText)
+        val languageHint = when {
+            zhMode == "trad" -> "Output Traditional Chinese when the input is Chinese/Cantonese. Use Cantonese wording naturally where present, e.g. 係咪 not 系咪."
+            zhMode == "simp" -> "Output Simplified Chinese when the input is Chinese/Mandarin. Preserve Cantonese wording if the input is Cantonese."
+            else -> "Preserve the input language(s). Do not translate. For Chinese/Cantonese, use natural Chinese punctuation and normalize obvious Cantonese character mistakes such as 系咪 -> 係咪 when appropriate. For English, use English punctuation and capitalization."
+        }
+        val punctuationRules = if (punctuate) """
 Punctuation rules:
 - Punctuate the full passage by meaning, not by ASR chunks.
-- Do not put a period/full stop after a stray conjunction or discourse marker such as "and", "then", "and then", "跟住", "之後".
 - Prefer commas for continuing thoughts; use a full stop only when the thought is complete.
 - Use ? only for real questions. In Cantonese, question patterns include 未, 係咪, 有冇, 去唔去, 可唔可以, 點解, 幾時, 邊個, 邊度.
 - Do not add random question marks just because the sentence ends with 啊/呀/喇/啦/呢/咧.
 - Mixed Chinese/English dictation is allowed; punctuate each language naturally without translating.
 """.trimIndent() else ""
-            val task = when {
-                punctuate && correctText -> "Clean this voice dictation transcript and punctuate it naturally: add punctuation/capitalization, remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Preserve meaning, language mix, and speaker intent. Do not add new ideas."
-                punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording, remove words, or change meaning. Follow the punctuation rules carefully."
-                correctText -> "Clean this voice dictation transcript without changing meaning: remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Do not translate or add new ideas."
-                else -> "Return the text unchanged."
-            }
-            val examples = """
+        val task = when {
+            punctuate && correctText -> "Clean this voice dictation transcript and punctuate it naturally: add punctuation/capitalization, remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Preserve meaning, language mix, and speaker intent. Do not add new ideas."
+            punctuate -> "Add natural punctuation and capitalization only. Do not rewrite wording, remove words, or change meaning. Follow the punctuation rules carefully."
+            correctText -> "Clean this voice dictation transcript without changing meaning: remove filler words and false starts, remove stray ASR fragments, fix obvious ASR word mistakes, and normalize obvious Cantonese character mistakes. Do not translate or add new ideas."
+            else -> "Return the text unchanged."
+        }
+        val examples = """
 Examples:
+Input: WELL LETS TEST THIS MODEL NOW TT'S NOT BAD NO PUNCTUTION NOR NOTHING 嗯
+Output: Well, let's test this model now. It's not bad; no punctuation nor nothing. 嗯。
 Input: 食咗飯未啊 聽日去唔去街啊 跟住之後系咪去踢波咧 Let's go to uh play soccer tomorrow and then we may actually go have a debate Lesson and Then we can go back home and chill
 Output: 食咗飯未啊？聽日去唔去街啊？跟住之後係咪去踢波呢？ Let's go play soccer tomorrow, and then maybe we can have a debate. Then we can go back home and chill.
-Input: I think we should go tomorrow and then maybe after lunch we can meet them
-Output: I think we should go tomorrow, and then maybe after lunch we can meet them.
-Input: 今日好攰啊跟住返到屋企就瞓覺啦
-Output: 今日好攰啊，跟住返到屋企就瞓覺啦。
 """.trimIndent()
-            val userPrompt = listOf(task, languageHint, punctuationRules, examples, "Return only the corrected text. No explanations.", "Text:\n$text")
-                .filter { it.isNotBlank() }
-                .joinToString("\n\n")
-            val body = JSONObject()
-                .put("model", openRouterModel.ifBlank { "qwen/qwen3-next-80b-a3b-instruct:free" })
-                .put("temperature", 0.0)
-                .put("messages", JSONArray()
-                    .put(JSONObject().put("role", "system").put("content", "You are a conservative voice dictation cleanup engine for Cantonese, Chinese, and English. Return only the corrected transcript. No explanations, no quotes, no markdown, no reasoning. Preserve meaning and language mix. Remove obvious dictation noise when text correction is requested."))
-                    .put(JSONObject().put("role", "user").put("content", userPrompt)))
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val resp = stream?.bufferedReader()?.readText().orEmpty()
-            if (code !in 200..299 || !resp.trimStart().startsWith("{")) throw RuntimeException("OpenRouter HTTP $code: ${resp.take(180)}")
-            val json = JSONObject(resp)
-            val fixed = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content")?.trim().orEmpty()
-            fixed.removeSurrounding("\"").trim().ifBlank { text }
-        } catch (t: Throwable) {
-            Log.w("QwenKeyboard", "OpenRouter correction failed; using fallback", t)
-            if (punctuate) addRulePunctuationFallback(text) else text
+        val userPrompt = listOf(task, languageHint, punctuationRules, examples, "Return only the corrected text. No explanations.", "Text:\n$text")
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        val models = openRouterFallbackModels()
+        var lastError = ""
+        for (model in models) {
+            try {
+                postUi { voiceStatusText = "Cloud AI correcting… ${shortCloudModelLabel(model)}" }
+                val fixed = callOpenRouterCorrection(key, model, userPrompt).trim().removeSurrounding("\"").trim()
+                if (fixed.isNotBlank()) return fixed
+            } catch (t: Throwable) {
+                lastError = t.message.orEmpty().take(140)
+                Log.w("QwenKeyboard", "OpenRouter correction failed for $model", t)
+                continue
+            }
         }
+        postUi { voiceStatusText = "Cloud AI failed; offline fallback${if (lastError.isBlank()) "" else ": ${lastError.take(60)}"}" }
+        return offlineVoiceCorrectionFallback(text, punctuate, correctText)
+    }
+
+    private fun openRouterFallbackModels(): List<String> {
+        val preferred = openRouterModel.ifBlank { "qwen/qwen3-next-80b-a3b-instruct:free" }
+        val fallbacks = listOf(
+            preferred,
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemma-4-26b-a4b-it:free",
+            "nousresearch/hermes-3-llama-3.1-405b:free"
+        )
+        return fallbacks.distinct()
+    }
+
+    private fun shortCloudModelLabel(model: String): String = when {
+        model.contains("qwen", true) -> "Qwen"
+        model.contains("llama", true) -> "Llama"
+        model.contains("gemma", true) -> "Gemma"
+        model.contains("hermes", true) -> "Hermes"
+        else -> "Cloud"
+    }
+
+    private fun callOpenRouterCorrection(key: String, model: String, userPrompt: String): String {
+        val url = java.net.URL("https://openrouter.ai/api/v1/chat/completions")
+        val conn = (url.openConnection() as java.net.HttpURLConnection)
+        conn.requestMethod = "POST"
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 90_000
+        conn.doOutput = true
+        conn.setRequestProperty("Authorization", "Bearer $key")
+        conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        conn.setRequestProperty("HTTP-Referer", "https://github.com/yatbond/qwen-keyboard")
+        conn.setRequestProperty("X-Title", "Dee Keyboard")
+        val body = JSONObject()
+            .put("model", model)
+            .put("temperature", 0.0)
+            .put("messages", JSONArray()
+                .put(JSONObject().put("role", "system").put("content", "You are a conservative voice dictation cleanup engine for Cantonese, Chinese, and English. Return only the corrected transcript. No explanations, no quotes, no markdown, no reasoning. Preserve meaning and language mix."))
+                .put(JSONObject().put("role", "user").put("content", userPrompt)))
+        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val resp = stream?.bufferedReader()?.readText().orEmpty()
+        if (code !in 200..299 || !resp.trimStart().startsWith("{")) throw RuntimeException("OpenRouter HTTP $code")
+        val json = JSONObject(resp)
+        return json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty()
+    }
+
+    private fun offlineVoiceCorrectionFallback(input: String, punctuate: Boolean, correctText: Boolean): String {
+        var t = input.trim()
+        if (t.isBlank()) return t
+        if (correctText) {
+            t = t.replace(Regex("(?i)\\btt'?s\\b"), "it's")
+                .replace(Regex("(?i)\\bpunctution\\b"), "punctuation")
+                .replace(Regex("(?i)\\bpuncutation\\b"), "punctuation")
+                .replace(Regex("(?i)\\blets\\b"), "let's")
+                .replace(Regex("(?i)\\buh\\b"), "")
+                .replace("系咪", "係咪")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            if (t == t.uppercase() && t.any { it.isLetter() }) t = t.lowercase().replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        }
+        if (punctuate) t = addRulePunctuationFallback(t)
+        return t
     }
 
     private fun recoverBlankLocalQwen(chunk: LiveChunk): Pair<String, String> {
