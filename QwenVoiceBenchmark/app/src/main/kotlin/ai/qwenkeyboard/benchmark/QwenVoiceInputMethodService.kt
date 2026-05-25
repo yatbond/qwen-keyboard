@@ -149,6 +149,9 @@ class QwenVoiceInputMethodService : InputMethodService() {
     private var previewLastInsertedText = ""
     private var previewAiCandidateText = ""
     private var previewEditActive = false
+    private var cancelFinalAiCorrection = false
+    private var previewAiFixGeneration = 0
+    private var ignoreSelectionUpdatesUntilMs = 0L
     private val previewAudioChunks = mutableListOf<File>()
     private var previewAudioDir: File? = null
 
@@ -1589,7 +1592,13 @@ Dee Keyboard full feature guide
             setHintTextColor(0xFFB7C0CC.toInt())
             setBackgroundColor(0xFF46505E.toInt())
             setPadding(dp(8), dp(2), dp(8), dp(2))
-            setOnFocusChangeListener { _, hasFocus -> previewEditActive = hasFocus; if (hasFocus) voiceStatusText = "Editing main preview" }
+            setOnFocusChangeListener { _, hasFocus ->
+                previewEditActive = hasFocus
+                if (hasFocus) {
+                    cancelPendingAiCorrection()
+                    voiceStatusText = "Editing main preview"
+                }
+            }
         }
         root.addView(previewInput, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(2) })
         addAiCandidateBox(root, compact = true)
@@ -1652,7 +1661,13 @@ Dee Keyboard full feature guide
             setHintTextColor(0xFFB7C0CC.toInt())
             setBackgroundColor(0xFF46505E.toInt())
             setPadding(dp(8), dp(4), dp(8), dp(4))
-            setOnFocusChangeListener { _, hasFocus -> previewEditActive = hasFocus; if (hasFocus) voiceStatusText = "Editing main preview" }
+            setOnFocusChangeListener { _, hasFocus ->
+                previewEditActive = hasFocus
+                if (hasFocus) {
+                    cancelPendingAiCorrection()
+                    voiceStatusText = "Editing main preview"
+                }
+            }
         }
         root.addView(previewInput, LinearLayout.LayoutParams(-1, dp(58)).apply { topMargin = dp(3) })
         addAiCandidateBox(root, compact = false)
@@ -2324,13 +2339,20 @@ Dee Keyboard full feature guide
         val shouldRunAction = when (action) {
             EditorInfo.IME_ACTION_SEARCH,
             EditorInfo.IME_ACTION_GO -> true
+            EditorInfo.IME_ACTION_SEND -> true
             EditorInfo.IME_ACTION_NEXT,
             EditorInfo.IME_ACTION_DONE -> !isMultiLine
-            // Messaging apps often expose SEND while still allowing multi-line text.
-            // Keep Enter as newline there; app send buttons remain available separately.
             else -> false
         }
-        if (shouldRunAction && ic.performEditorAction(action)) return
+        if (shouldRunAction) {
+            if (running.get()) {
+                cancelPendingAiCorrection()
+                queue.clear()
+                stopDictation()
+            }
+            if (ic.performEditorAction(action)) return
+        }
+        markOwnInputEdit()
         ic.commitText("\n", 1)
     }
 
@@ -2554,6 +2576,7 @@ Dee Keyboard full feature guide
             return
         }
         val ic = currentInputConnection ?: return
+        markOwnInputEdit()
         if (text.length == 1 && text[0] in ",.?!:;，。？！：；") {
             val before = ic.getTextBeforeCursor(8, 0)?.toString().orEmpty()
             val spaces = before.takeLastWhile { it == ' ' }.length
@@ -2578,6 +2601,7 @@ Dee Keyboard full feature guide
         previewInput.setSelection(lo + text.length)
         previewLastInsertedText = previewInput.text.toString()
         previewAiFixedText = ""
+        cancelPendingAiCorrection()
     }
 
     private fun deleteFromPreview(): Boolean {
@@ -2595,6 +2619,7 @@ Dee Keyboard full feature guide
         }
         previewLastInsertedText = previewInput.text.toString()
         previewAiFixedText = ""
+        cancelPendingAiCorrection()
         return true
     }
 
@@ -3210,6 +3235,7 @@ Dee Keyboard full feature guide
         if (!selected.isNullOrEmpty()) {
             // commitText replaces the active selection. This is the behavior users
             // expect after Android's normal long-press / drag text selection handles.
+            markOwnInputEdit()
             ic.commitText("", 1)
             lastSpaceAt = 0L
             refreshSuggestions()
@@ -3219,6 +3245,7 @@ Dee Keyboard full feature guide
     }
 
     private fun sendBackspace(ic: android.view.inputmethod.InputConnection) {
+        markOwnInputEdit()
         if (!ic.deleteSurroundingText(1, 0)) {
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
             ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
@@ -3253,13 +3280,31 @@ Dee Keyboard full feature guide
         val before = ic.getTextBeforeCursor(80, 0)?.toString() ?: ""
         val trimmed = before.trimEnd()
         val trailingSpaces = before.length - trimmed.length
+        val lastCodePoint = trimmed.codePointBeforeOrNull()
+        if (lastCodePoint != null && isChineseCodePoint(lastCodePoint)) {
+            val charLen = Character.charCount(lastCodePoint)
+            markOwnInputEdit()
+            ic.deleteSurroundingText(maxOf(1, trailingSpaces + charLen), 0)
+            if (verboseMode) voiceStatusText = "Deleted one Chinese character"
+            return
+        }
         val deletedWord = trimmed.takeLastWhile { !it.isWhitespace() }
         val wordLen = deletedWord.length
         val normalizedDeleted = normalizeLearnedWord(deletedWord)
         if (normalizedDeleted.length >= 2 && !wordFreq.containsKey(normalizedDeleted)) pendingMistakeWord = normalizedDeleted
+        markOwnInputEdit()
         ic.deleteSurroundingText(maxOf(1, trailingSpaces + wordLen), 0)
         if (verboseMode) voiceStatusText = "Deleted last word"
     }
+
+    private fun String.codePointBeforeOrNull(): Int? = if (isEmpty()) null else codePointBefore(length)
+
+    private fun isChineseCodePoint(codePoint: Int): Boolean =
+        codePoint in 0x4E00..0x9FFF ||
+            codePoint in 0x3400..0x4DBF ||
+            codePoint in 0x20000..0x2EBEF ||
+            codePoint in 0xF900..0xFAFF ||
+            codePoint in 0x2F800..0x2FA1F
 
     private fun keyParams() = LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = 0; rightMargin = 0 }
     private fun rowParams() = LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(2) }
@@ -3277,6 +3322,8 @@ Dee Keyboard full feature guide
         buffer.clear()
         previewRawText.clear()
         previewAiFixedText = ""
+        cancelFinalAiCorrection = false
+        previewAiFixGeneration++
         previewLastInsertedText = ""
         previewAiCandidateText = ""
         clearPreviewAudioFiles()
@@ -3307,6 +3354,32 @@ Dee Keyboard full feature guide
         setIdleStatus(if (verboseMode) "Stopping… finishing queued chunks" else "")
     }
 
+    private fun markOwnInputEdit() {
+        ignoreSelectionUpdatesUntilMs = System.currentTimeMillis() + 700L
+    }
+
+    private fun cancelPendingAiCorrection() {
+        cancelFinalAiCorrection = true
+        previewAiFixGeneration++
+        previewAiFixedText = ""
+        previewAiCandidateText = ""
+        if (::previewAiCandidateInput.isInitialized) previewAiCandidateInput.setText("")
+    }
+
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        if (System.currentTimeMillis() < ignoreSelectionUpdatesUntilMs) return
+        if ((running.get() || queue.isNotEmpty()) && buffer.isNotBlank() && (oldSelStart != newSelStart || oldSelEnd != newSelEnd)) {
+            cancelPendingAiCorrection()
+        }
+    }
 
     private fun collectLearningPayload(): JSONObject {
         val prefs = getSharedPreferences("pc_asr", MODE_PRIVATE)
@@ -3400,6 +3473,7 @@ Dee Keyboard full feature guide
                     if (previewModeEnabled) {
                         appendPreviewText(text, rawText)
                     } else {
+                        markOwnInputEdit()
                         currentInputConnection?.commitText(text + " ", 1)
                         buffer.append(text).append(' ')
                         learnWordsFromText(text)
@@ -3420,14 +3494,16 @@ Dee Keyboard full feature guide
         postUi {
             micButton.text = "Start Dictation"
             if (::recordButton.isInitialized) recordButton.text = "●"
-            if (finalStatus.isNotBlank()) voiceStatusText = finalStatus else setIdleStatus(if (verboseMode) "Dictation stopped" else "")
+            if (finalStatus == "__keep_status__") {
+                // final correction already posted a 2-second status; do not overwrite it immediately.
+            } else if (finalStatus.isNotBlank()) voiceStatusText = finalStatus else setIdleStatus(if (verboseMode) "Dictation stopped" else "")
         }
     }
 
     private fun finalizeVoicePunctuationAfterChunks(client: PcAsrClient?): String {
         val originalWithSpace = buffer.toString()
         val original = originalWithSpace.trim()
-        if (original.isBlank() || (voicePunctuationMode == "off" && !voiceAiTextCorrectionEnabled)) return ""
+        if (original.isBlank() || cancelFinalAiCorrection || (voicePunctuationMode == "off" && !voiceAiTextCorrectionEnabled)) return ""
         val fixed = applyFinalVoicePunctuation(original, client).trim()
         if (fixed.isBlank()) return "AI correction returned blank; kept original"
         if (fixed == original) return if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI checked; no change needed" else "Punctuation checked; no change needed"
@@ -3440,21 +3516,36 @@ Dee Keyboard full feature guide
                     previewInput.setSelection(previewInput.text.length)
                 }
                 transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied"
+                showTemporaryStatus(if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied")
             }
         } else {
             val deleteChars = originalWithSpace.length
-            buffer.clear(); buffer.append(fixed).append(' ')
+            var applied = false
             postUi {
-                currentInputConnection?.apply {
-                    deleteSurroundingText(deleteChars, 0)
-                    commitText(fixed + " ", 1)
+                if (!cancelFinalAiCorrection) {
+                    currentInputConnection?.apply {
+                        val beforeCursor = getTextBeforeCursor(deleteChars + 8, 0)?.toString().orEmpty()
+                        if (beforeCursor.endsWith(originalWithSpace)) {
+                            markOwnInputEdit()
+                            deleteSurroundingText(deleteChars, 0)
+                            commitText(fixed + " ", 1)
+                            applied = true
+                        } else {
+                            cancelFinalAiCorrection = true
+                        }
+                    }
                 }
-                transcript.text = fixed
-                voiceStatusText = if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied"
+                if (applied) {
+                    buffer.clear(); buffer.append(fixed).append(' ')
+                    transcript.text = fixed
+                    showTemporaryStatus(if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied")
+                } else {
+                    setIdleStatus(if (verboseMode) "AI correction cancelled" else "")
+                }
             }
+            return "__keep_status__"
         }
-        return if (voicePunctuationMode == "cloud_ai" || voiceAiTextCorrectionEnabled) "Alibaba AI correction applied" else "Punctuation applied"
+        return "__keep_status__"
     }
 
     private fun applyFinalVoicePunctuation(text: String, client: PcAsrClient?): String {
@@ -3672,6 +3763,7 @@ Simplified output: 食咗饭未啊？听日去唔去街啊？跟住之后系咪�
             return
         }
         previewLastInsertedText = before
+        val generation = ++previewAiFixGeneration
         if (previewAiFixModel.startsWith("fix_")) {
             val fixEngine = previewAiFixModel.removePrefix("fix_")
             voiceStatusText = "Re-transcribing full clip with ${shortModelDisplay(fixEngine)}…"
@@ -3679,20 +3771,25 @@ Simplified output: 食咗饭未啊？听日去唔去街啊？跟住之后系咪�
                 try {
                     val fullClip = buildFullPreviewWav() ?: throw IllegalStateException("No saved preview audio yet")
                     val candidate = transcribePreviewFullClip(fullClip, fixEngine)
-                    postUi { applyPreviewFixResult(before, candidate, "${shortModelDisplay(fixEngine)} full clip") }
+                    postUi { if (generation == previewAiFixGeneration && previewTextStillEquals(before)) applyPreviewFixResult(before, candidate, "${shortModelDisplay(fixEngine)} full clip") }
                 } catch (t: Throwable) {
                     val fallback = fixPreviewTextWithRules(before)
                     postUi {
-                        if (fallback != before) applyPreviewFixResult(before, fallback, "Re-transcribe unavailable; used Rules")
-                        else voiceStatusText = "Re-transcribe unavailable: ${(t.message ?: t.javaClass.simpleName).take(90)}"
+                        if (generation == previewAiFixGeneration && previewTextStillEquals(before)) {
+                            if (fallback != before) applyPreviewFixResult(before, fallback, "Re-transcribe unavailable; used Rules")
+                            else voiceStatusText = "Re-transcribe unavailable: ${(t.message ?: t.javaClass.simpleName).take(90)}"
+                        }
                     }
                 }
             }, "qwen-preview-asr-fix").start()
         } else {
             val fixed = fixPreviewTextWithRules(before)
-            applyPreviewFixResult(before, fixed, "Rules")
+            if (generation == previewAiFixGeneration && previewTextStillEquals(before)) applyPreviewFixResult(before, fixed, "Rules")
         }
     }
+
+    private fun previewTextStillEquals(expected: String): Boolean =
+        if (::previewInput.isInitialized) previewInput.text.toString() == expected else previewLastInsertedText == expected
 
     private fun applyPreviewFixResult(before: String, fixed: String, label: String) {
         val converted = convertChinese(fixed)
@@ -4038,6 +4135,13 @@ Simplified output: 食咗饭未啊？听日去唔去街啊？跟住之后系咪�
     }
 
     private fun setIdleStatus(text: String) { updateVoiceStatusPanel(text) }
+
+    private fun showTemporaryStatus(message: String, durationMs: Long = 2000L) {
+        updateVoiceStatusPanel(message)
+        mainHandler.postDelayed({
+            if (::status.isInitialized && !running.get()) updateVoiceStatusPanel("")
+        }, durationMs)
+    }
 
     private fun updateVoiceStatusPanel(requested: String = "") {
         if (!::status.isInitialized) return
@@ -4541,6 +4645,8 @@ Simplified output: 食咗饭未啊？听日去唔去街啊？跟住之后系咪�
     override fun onFinishInput() {
         repeatRunnable?.let { repeatHandler.removeCallbacks(it) }
         flushPendingLearningSaves()
+        cancelPendingAiCorrection()
+        queue.clear()
         if (running.get()) stopDictation()
         super.onFinishInput()
     }

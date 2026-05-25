@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 239
-        versionName = "4.9.1-ai-model-migration"
+        versionCode = 240
+        versionName = "4.9.2-small-bug-fixes"
     }
 
 
