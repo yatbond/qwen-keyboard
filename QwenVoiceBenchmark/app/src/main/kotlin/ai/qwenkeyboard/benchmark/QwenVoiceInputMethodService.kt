@@ -3301,7 +3301,12 @@ Dee Keyboard full feature guide
 
     private fun shouldSwipeDeleteOneChar(trimmedBeforeCursor: String, deletedWord: String): Boolean {
         val last = trimmedBeforeCursor.codePointBeforeOrNull() ?: return false
-        if (isChineseCodePoint(last) || isCjkPunctuationCodePoint(last)) return true
+        if (isChineseCodePoint(last)) return true
+        if (isCjkPunctuationCodePoint(last)) return true
+        if (isAsciiPunctuationCodePoint(last)) {
+            val beforeLast = trimmedBeforeCursor.dropLast(Character.charCount(last)).codePointBeforeOrNull()
+            if (beforeLast != null && isChineseCodePoint(beforeLast)) return true
+        }
         // Chinese sentences often have no spaces. If the current “word” contains any
         // Chinese character, treat swipe-delete like character delete, not English word delete.
         return deletedWord.codePoints().anyMatch { isChineseCodePoint(it) }
@@ -3318,6 +3323,9 @@ Dee Keyboard full feature guide
         codePoint in 0x3000..0x303F || // CJK symbols/punctuation: 。、〝〞 etc.
             codePoint in 0xFF00..0xFFEF || // full-width forms: ，！？：； etc.
             codePoint == 0x00B7
+
+    private fun isAsciiPunctuationCodePoint(codePoint: Int): Boolean =
+        codePoint in listOf('.', ',', '?', '!', ':', ';', '…', '·', '-', '—').map { it.code }
 
     private fun keyParams() = LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = 0; rightMargin = 0 }
     private fun rowParams() = LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(2) }
