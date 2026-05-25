@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 240
-        versionName = "4.9.2-small-bug-fixes"
+        versionCode = 241
+        versionName = "4.9.3-chinese-swipe-delete-fix"
     }
 
 
