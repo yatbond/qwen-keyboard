@@ -114,9 +114,12 @@ class QwenVoiceInputMethodService : InputMethodService() {
     private var previewAiFixModel = "rules" // rules or fix_<asr-engine> full-clip re-transcription
     private var repeatDelayMs = 420L
     private var lastSpaceAt = 0L
+    private var pendingNextWordContext: List<String>? = null
     private val buffer = StringBuilder()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val repeatHandler = Handler(Looper.getMainLooper())
+    private val suggestionRefreshDelayMs = 160L
+    private val suggestionRefreshRunnable = Runnable { refreshSuggestionsNow() }
     private var repeatRunnable: Runnable? = null
     private var touchDownX = 0f
     private var touchDownY = 0f
@@ -2410,7 +2413,7 @@ Dee Keyboard full feature guide
         keyboardPanel.addView(buildSuggestionRow(), LinearLayout.LayoutParams(-1, suggestionRowHeightPx()).apply { topMargin = dp(if (isLandscapeLayout()) 1 else 2) })
         if (previewModeEnabled) addCompactPreviewEditor(keyboardPanel)
         addKeyboardRows(keyboardPanel)
-        refreshSuggestions()
+        refreshSuggestionsNow()
     }
 
     private fun letterRow(chars: String, sidePad: Int = 0): LinearLayout {
@@ -2576,6 +2579,7 @@ Dee Keyboard full feature guide
             return
         }
         val ic = currentInputConnection ?: return
+        pendingNextWordContext = null
         markOwnInputEdit()
         if (text.length == 1 && text[0] in ",.?!:;，。？！：；") {
             val before = ic.getTextBeforeCursor(8, 0)?.toString().orEmpty()
@@ -2586,7 +2590,7 @@ Dee Keyboard full feature guide
             ic.commitText(text, 1)
         }
         lastSpaceAt = 0L
-        refreshSuggestions()
+        scheduleSuggestionsRefresh()
     }
 
     private fun previewIsFocused(): Boolean = previewModeEnabled && ::previewInput.isInitialized && previewInput.hasFocus() && previewEditActive
@@ -2630,6 +2634,7 @@ Dee Keyboard full feature guide
         }
         val now = System.currentTimeMillis()
         val ic = currentInputConnection ?: return
+        pendingNextWordContext = null
         if (autoCorrectEnabled) applyBasicAutoCorrect()
         val wordBeforeSpace = currentWord()
         learnWord(wordBeforeSpace)
@@ -2652,7 +2657,7 @@ Dee Keyboard full feature guide
             ic.commitText(" ", 1)
             lastSpaceAt = now
         }
-        if (::suggestionCenter.isInitialized) setSuggestionTexts(nextWordSuggestions())
+        scheduleSuggestionsRefresh()
     }
 
     private fun applyBasicAutoCorrect() {
@@ -2674,7 +2679,16 @@ Dee Keyboard full feature guide
         }
     }
 
+    private fun scheduleSuggestionsRefresh(delayMs: Long = suggestionRefreshDelayMs) {
+        mainHandler.removeCallbacks(suggestionRefreshRunnable)
+        mainHandler.postDelayed(suggestionRefreshRunnable, delayMs)
+    }
+
     private fun refreshSuggestions() {
+        scheduleSuggestionsRefresh()
+    }
+
+    private fun refreshSuggestionsNow() {
         if (!::suggestionCenter.isInitialized || !suggestionModeEnabled) {
             if (::suggestionCenter.isInitialized) setSuggestionTexts(emptyList())
             return
@@ -2685,15 +2699,15 @@ Dee Keyboard full feature guide
         }
         val word = currentWord().lowercase()
         if (word.isBlank()) {
-            setSuggestionTexts(nextWordSuggestions())
+            setSuggestionTexts(pendingNextWordContext?.let { nextWordSuggestionsForContext(it) }.orEmpty())
             return
         }
+        pendingNextWordContext = null
         val global = globalSuggestions(word)
-        val next = nextWordSuggestionsForContext(listOf(word))
         val suggestions = if ((wordFreq.containsKey(word) || learnedFreq.containsKey(word)) && global.isEmpty()) {
-            (next + listOf(word) + learnedCorrectionSuggestions(word) + specialSuggestions[word].orEmpty() + prefixSuggestions(word).filter { it != word }).distinct().filterNotForgotten().take(3)
+            (listOf(word) + learnedCorrectionSuggestions(word) + specialSuggestions[word].orEmpty() + prefixSuggestions(word).filter { it != word }).distinct().filterNotForgotten().take(3)
         } else {
-            (global + next + learnedCorrectionSuggestions(word) + specialSuggestions[word].orEmpty() + bestCorrections(word, maxDistance = if (word.length <= 4) 2 else 3) + prefixSuggestions(word)).distinct().filterNotForgotten().take(3)
+            (global + learnedCorrectionSuggestions(word) + specialSuggestions[word].orEmpty() + bestCorrections(word, maxDistance = if (word.length <= 4) 2 else 3) + prefixSuggestions(word)).distinct().filterNotForgotten().take(3)
         }
         setSuggestionTexts(suggestions)
     }
@@ -2734,6 +2748,7 @@ Dee Keyboard full feature guide
         val ic = currentInputConnection ?: return
         val code = currentChineseCode()
         if (code.isNotBlank()) ic.deleteSurroundingText(code.length, 0)
+        pendingNextWordContext = null
         ic.commitText(convertChinese(candidate), 1)
         learnWordsFromText(candidate)
         lastSpaceAt = 0L
@@ -2881,31 +2896,24 @@ Dee Keyboard full feature guide
     private fun replaceCurrentWord(word: String) {
         val ic = currentInputConnection ?: return
         val current = currentWord()
+        val selectedLower = normalizeLearnedWord(word)
         if (current.isBlank()) {
             ic.commitText(word + " ", 1)
             learnWordsFromText(word)
+            pendingNextWordContext = listOf(selectedLower)
             lastSpaceAt = 0L
-            refreshSuggestions()
-            return
-        }
-        val currentLower = normalizeLearnedWord(current)
-        val selectedLower = normalizeLearnedWord(word)
-        val isNextWordPrediction = nextWordSuggestionsForContext(listOf(currentLower)).map { normalizeLearnedWord(it) }.contains(selectedLower)
-        if (isNextWordPrediction) {
-            ic.commitText(" $word ", 1)
-            learnWordsFromText("$current $word")
-            lastSpaceAt = 0L
-            refreshSuggestions()
+            refreshSuggestionsNow()
             return
         }
         ic.deleteSurroundingText(current.length, 0)
         ic.commitText(matchCase(current, word) + " ", 1)
         learnWord(word)
         learnCorrection(current, word)
+        pendingNextWordContext = listOf(selectedLower)
         // Suggestion selection already adds one space. Keep double-space logic waiting
         // for two explicit spacebar taps after this, rather than firing on the next tap.
         lastSpaceAt = 0L
-        refreshSuggestions()
+        refreshSuggestionsNow()
     }
 
     private fun currentWord(): String {

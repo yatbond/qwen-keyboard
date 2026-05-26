@@ -15,11 +15,13 @@ Set DASHSCOPE_API_KEY for DashScope cloud engines.
 import base64
 import json
 import hashlib
+import gc
 import mimetypes
 import os
 import sys
 import re
 import tempfile
+import threading
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,6 +50,10 @@ os.environ.setdefault("HF_HOME", HF_HOME)
 
 app = FastAPI(title="Qwen Keyboard PC ASR Server")
 _engines: Dict[str, Any] = {}
+_engine_lock = threading.RLock()
+_qwen_17_active = 0
+_qwen_17_last_used = 0.0
+QWEN_17_IDLE_UNLOAD_S = int(os.environ.get("QWEN_ASR_QWEN17_IDLE_UNLOAD_S", "3600"))
 
 QWEN_06_ALIASES = {"qwen_0_6b", "qwen_06b", "qwen_0.6b", "qwen_onnx"}
 QWEN_17_ALIASES = {"qwen_1_7b", "qwen_17b", "qwen_1.7b"}
@@ -74,6 +80,60 @@ def normalize_engine(name: str) -> str:
 def require_auth(request: Request):
     if TOKEN and request.headers.get("x-qwen-asr-token") != TOKEN:
         raise PermissionError("bad or missing X-Qwen-Asr-Token")
+
+
+def begin_qwen_17_use():
+    global _qwen_17_active, _qwen_17_last_used
+    with _engine_lock:
+        _qwen_17_active += 1
+        _qwen_17_last_used = time.time()
+
+
+def end_qwen_17_use():
+    global _qwen_17_active, _qwen_17_last_used
+    with _engine_lock:
+        _qwen_17_active = max(0, _qwen_17_active - 1)
+        _qwen_17_last_used = time.time()
+
+
+def unload_qwen_17_if_idle(force: bool = False) -> List[str]:
+    """Unload Qwen 1.7B after one simple fixed idle timeout."""
+    global _qwen_17_last_used
+    now = time.time()
+    with _engine_lock:
+        if _qwen_17_active > 0:
+            return []
+        loaded = [key for key in list(_engines.keys()) if normalize_engine(key) in QWEN_17_ALIASES]
+        if not loaded:
+            return []
+        idle_s = now - _qwen_17_last_used if _qwen_17_last_used else 0
+        if not force and idle_s < QWEN_17_IDLE_UNLOAD_S:
+            return []
+        for key in loaded:
+            _engines.pop(key, None)
+        _qwen_17_last_used = 0.0
+
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        pass
+    return loaded
+
+
+def qwen_17_idle_unload_loop():
+    while True:
+        time.sleep(60)
+        unload_qwen_17_if_idle(force=False)
+
+
+@app.on_event("startup")
+def start_qwen_17_idle_unloader():
+    if QWEN_17_IDLE_UNLOAD_S > 0:
+        threading.Thread(target=qwen_17_idle_unload_loop, daemon=True).start()
 
 
 def cuda_device() -> Tuple[str, str]:
@@ -282,11 +342,17 @@ def run_dashscope_filetrans(path: str, engine_name: str, language: str):
 
 def run_engine(path: str, engine_name: str, language: str = ""):
     engine_name = normalize_engine(engine_name)
+    if engine_name in QWEN_17_ALIASES:
+        begin_qwen_17_use()
+        try:
+            engine = get_engine(engine_name)
+            return run_qwen_17(engine, path, engine_name, language)
+        finally:
+            end_qwen_17_use()
+
     engine = get_sensevoice_2025_engine(engine_name, language) if engine_name in SENSEVOICE_2025_ALIASES else get_engine(engine_name)
     if engine_name in QWEN_06_ALIASES:
         return run_qwen_onnx(engine, path, engine_name, language)
-    if engine_name in QWEN_17_ALIASES:
-        return run_qwen_17(engine, path, engine_name, language)
     if engine_name in SENSEVOICE_2025_ALIASES:
         return run_sensevoice(engine, path, engine_name, language)
     if engine_name in DASHSCOPE_FLASH_ALIASES:
@@ -429,8 +495,12 @@ def run_engine_chunked(path: str, engine_name: str, language: str, chunk_sec: fl
         workers = max(1, int(os.environ.get("QWEN_ASR_CHUNK_WORKERS", "2")))
 
         if engine_name in QWEN_17_ALIASES:
-            engine = get_engine(engine_name)
-            batch, elapsed = run_qwen_17_batch(engine, chunk_paths, engine_name, language)
+            begin_qwen_17_use()
+            try:
+                engine = get_engine(engine_name)
+                batch, elapsed = run_qwen_17_batch(engine, chunk_paths, engine_name, language)
+            finally:
+                end_qwen_17_use()
             for i, item in enumerate(batch):
                 texts[i] = item.get("text", "")
                 if item.get("language"):
@@ -479,6 +549,8 @@ def run_engine_chunked(path: str, engine_name: str, language: str, chunk_sec: fl
 
 @app.get("/health")
 def health():
+    now = time.time()
+    qwen_17_loaded = any(normalize_engine(key) in QWEN_17_ALIASES for key in _engines.keys())
     return {
         "ok": True,
         "default_engine": DEFAULT_ENGINE,
@@ -487,7 +559,25 @@ def health():
         "auth": bool(TOKEN),
         "dashscope": bool(os.environ.get("DASHSCOPE_API_KEY", "")),
         "hf_home": HF_HOME,
+        "qwen_1_7b": {
+            "loaded": qwen_17_loaded,
+            "active_requests": _qwen_17_active,
+            "idle_unload_s": QWEN_17_IDLE_UNLOAD_S,
+            "idle_s": int(now - _qwen_17_last_used) if qwen_17_loaded and _qwen_17_last_used else None,
+        },
     }
+
+
+@app.post("/admin/unload-qwen-1-7b")
+async def admin_unload_qwen_1_7b(request: Request):
+    try:
+        require_auth(request)
+        unloaded = unload_qwen_17_if_idle(force=True)
+        return JSONResponse({"ok": True, "unloaded": unloaded})
+    except PermissionError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=401)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
 
 
 @app.get("/engines")

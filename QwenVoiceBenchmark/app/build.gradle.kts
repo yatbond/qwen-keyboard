@@ -11,8 +11,8 @@ android {
         applicationId = "ai.qwenkeyboard.voicekeyboard"
         minSdk = 26
         targetSdk = 35
-        versionCode = 242
-        versionName = "4.9.4-chinese-punctuation-delete"
+        versionCode = 244
+        versionName = "4.9.6-next-word-after-tap"
     }
 
 
