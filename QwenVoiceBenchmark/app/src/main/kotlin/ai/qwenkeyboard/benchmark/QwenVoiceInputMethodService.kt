@@ -118,7 +118,7 @@ class QwenVoiceInputMethodService : InputMethodService() {
     private val buffer = StringBuilder()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val repeatHandler = Handler(Looper.getMainLooper())
-    private val suggestionRefreshDelayMs = 160L
+    private val suggestionRefreshDelayMs = 50L
     private val suggestionRefreshRunnable = Runnable { refreshSuggestionsNow() }
     private var repeatRunnable: Runnable? = null
     private var touchDownX = 0f
@@ -138,6 +138,11 @@ class QwenVoiceInputMethodService : InputMethodService() {
     }
     private var pendingForgetWord: String? = null
     private var pendingMistakeWord: String? = null
+    private var keyboardThemeMode = "dark" // dark, light
+    private var pausedAutoCorrectWord: String? = null
+    private var lastAutoCorrection: AutoCorrectionUndo? = null
+
+    private data class AutoCorrectionUndo(val original: String, val replacement: String, val appliedAtMs: Long)
     private var localAsrEngine: LocalAsrEngine? = null
     private var localAsrEngineName: String? = null
     private var voiceStatusText: CharSequence
@@ -160,6 +165,19 @@ class QwenVoiceInputMethodService : InputMethodService() {
 
     override fun onEvaluateFullscreenMode(): Boolean = false
 
+    private fun lightKeyboardTheme(): Boolean = keyboardThemeMode == "light"
+    private fun keyboardRootColor(): Int = if (lightKeyboardTheme()) 0xFFF3F5F8.toInt() else 0xFF20242C.toInt()
+    private fun keyboardKeyColor(): Int = if (lightKeyboardTheme()) 0xFFFFFFFF.toInt() else 0xFF3B414D.toInt()
+    private fun keyboardKeyDownColor(): Int = if (lightKeyboardTheme()) 0xFFDDE4EE.toInt() else 0xFF566071.toInt()
+    private fun keyboardCtrlColor(): Int = if (lightKeyboardTheme()) 0xFFE7ECF3.toInt() else 0xFF4A5261.toInt()
+    private fun keyboardSuggestionColor(): Int = if (lightKeyboardTheme()) 0xFFE9EEF6.toInt() else 0xFF343A46.toInt()
+    private fun keyboardTextColor(): Int = if (lightKeyboardTheme()) 0xFF111827.toInt() else 0xFFF7F7F7.toInt()
+    private fun keyboardMutedTextColor(): Int = if (lightKeyboardTheme()) 0xFF4B5563.toInt() else 0xFF9AA3AF.toInt()
+    private fun applyRootTheme() {
+        if (::inputRoot.isInitialized) inputRoot.setBackgroundColor(keyboardRootColor())
+        if (::status.isInitialized) status.setTextColor(if (lightKeyboardTheme()) 0xFF243041.toInt() else 0xFFECEFF4.toInt())
+    }
+
     override fun onCreateInputView(): View {
         SenseVoiceModelManager.cleanupLegacyModelFiles(filesDir)
         loadPrefs()
@@ -167,7 +185,7 @@ class QwenVoiceInputMethodService : InputMethodService() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), keyboardBottomInsetPx())
-            setBackgroundColor(0xFF20242C.toInt())
+            setBackgroundColor(keyboardRootColor())
         }
         inputRoot = root
 
@@ -247,6 +265,7 @@ class QwenVoiceInputMethodService : InputMethodService() {
         root.addView(clipboardPanel, LinearLayout.LayoutParams(-1, -2))
         root.addView(handwritingPanel, LinearLayout.LayoutParams(-1, -2))
         setVoiceMode(false)
+        applyRootTheme()
         return root
     }
 
@@ -286,6 +305,8 @@ class QwenVoiceInputMethodService : InputMethodService() {
         if (keySpacingMode !in listOf("tight", "normal", "comfortable")) keySpacingMode = "normal"
         suggestionSizeMode = p.getString("suggestion_size_mode", "normal") ?: "normal"
         if (suggestionSizeMode !in listOf("small", "normal", "large")) suggestionSizeMode = "normal"
+        keyboardThemeMode = p.getString("keyboard_theme_mode", "dark") ?: "dark"
+        if (keyboardThemeMode !in listOf("dark", "light")) keyboardThemeMode = "dark"
         flowInputEnabled = p.getBoolean("flow_input_enabled", false)
         displayBottomBufferDp = p.getInt("display_bottom_buffer_dp", 2).coerceIn(0, 96)
         splitKeyboardMode = p.getString("split_keyboard_mode", "auto") ?: "auto"
@@ -364,6 +385,7 @@ class QwenVoiceInputMethodService : InputMethodService() {
             .putString("keyboard_size_mode", keyboardSizeMode)
             .putString("key_spacing_mode", keySpacingMode)
             .putString("suggestion_size_mode", suggestionSizeMode)
+            .putString("keyboard_theme_mode", keyboardThemeMode)
             .putBoolean("flow_input_enabled", flowInputEnabled)
             .putInt("display_bottom_buffer_dp", displayBottomBufferDp.coerceIn(0, 96))
             .putString("split_keyboard_mode", splitKeyboardMode)
@@ -916,6 +938,12 @@ class QwenVoiceInputMethodService : InputMethodService() {
         ), suggestionSizeMode) {
             suggestionSizeMode = it
         })
+        root.addView(choiceRow("Keyboard theme", listOf(
+            "dark" to "Dark", "light" to "Light"
+        ), keyboardThemeMode) {
+            keyboardThemeMode = it
+            applyRootTheme()
+        })
         root.addView(settingToggle("Flow swipe input prototype", flowInputEnabled) { flowInputEnabled = !flowInputEnabled })
         root.addView(choiceRow("Bottom buffer", listOf(
             "2" to "2dp", "12" to "12dp", "24" to "24dp", "36" to "36dp", "48" to "48dp", "64" to "64dp"
@@ -1362,6 +1390,7 @@ Dee Keyboard full feature guide
                 refreshSettingsPanel()
                 refreshVoicePanel()
                 refreshKeyboardPanel()
+                applyRootTheme()
                 updateRootPadding()
             }
         }
@@ -1395,6 +1424,7 @@ Dee Keyboard full feature guide
                     refreshSettingsPanel()
                     refreshVoicePanel()
                     refreshKeyboardPanel()
+                    applyRootTheme()
                     updateRootPadding()
                 }
             }, LinearLayout.LayoutParams(0, dp(54), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
@@ -1797,8 +1827,8 @@ Dee Keyboard full feature guide
             minWidth = 0
             minHeight = 0
             includeFontPadding = false
-            setTextColor(0xFFECEFF4.toInt())
-            setBackgroundColor(0xFF343A46.toInt())
+            setTextColor(keyboardTextColor())
+            setBackgroundColor(keyboardSuggestionColor())
         }
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         suggestionLeft = suggestionButton()
@@ -1818,25 +1848,18 @@ Dee Keyboard full feature guide
     private data class DrawKey(val label: String, val rect: RectF, val action: String, val longPress: String? = null)
 
     private inner class CanvasKeyboardView : View(this) {
-        private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF3B414D.toInt() }
-        private val downPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF566071.toInt() }
-        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFF7F7F7.toInt()
-            textAlign = Paint.Align.CENTER
-        }
-        private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF9AA3AF.toInt()
-            textAlign = Paint.Align.CENTER
-        }
-        private val ctrlPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF4A5261.toInt()
-        }
+        private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val downPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+        private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+        private val ctrlPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val keys = mutableListOf<DrawKey>()
         private var lastKeyWidth = -1
         private var lastKeyHeight = -1
         private var lastKeySymbols = false
         private var lastKeyPreviewMode = false
         private var lastKeySplitMode = ""
+        private var lastKeyThemeMode = ""
         private var downKey: DrawKey? = null
         private var repeatFired = false
         private val flowKeys = mutableListOf<String>()
@@ -1862,6 +1885,11 @@ Dee Keyboard full feature guide
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             ensureKeys()
+            keyPaint.color = keyboardKeyColor()
+            downPaint.color = keyboardKeyDownColor()
+            ctrlPaint.color = keyboardCtrlColor()
+            textPaint.color = keyboardTextColor()
+            hintPaint.color = keyboardMutedTextColor()
             for (key in keys) {
                 val isCtrl = key.action.startsWith("CTRL_")
                 val bg = when {
@@ -1912,13 +1940,14 @@ Dee Keyboard full feature guide
 
         private fun ensureKeys(force: Boolean = false) {
             if (width <= 0 || height <= 0) return
-            if (!force && keys.isNotEmpty() && lastKeyWidth == width && lastKeyHeight == height && lastKeySymbols == symbols && lastKeyPreviewMode == previewModeEnabled && lastKeySplitMode == splitKeyboardMode) return
+            if (!force && keys.isNotEmpty() && lastKeyWidth == width && lastKeyHeight == height && lastKeySymbols == symbols && lastKeyPreviewMode == previewModeEnabled && lastKeySplitMode == splitKeyboardMode && lastKeyThemeMode == keyboardThemeMode) return
             buildKeys(width.toFloat())
             lastKeyWidth = width
             lastKeyHeight = height
             lastKeySymbols = symbols
             lastKeyPreviewMode = previewModeEnabled
             lastKeySplitMode = splitKeyboardMode
+            lastKeyThemeMode = keyboardThemeMode
         }
 
         private fun buildKeys(w: Float) {
@@ -2664,19 +2693,42 @@ Dee Keyboard full feature guide
         val ic = currentInputConnection ?: return
         val word = currentWord()
         if (word.length < 2) return
-        val lower = word.lowercase()
+        val lower = normalizeLearnedWord(word)
+        if (pausedAutoCorrectWord == lower) return
         val contraction = contractionSuggestions[lower]?.firstOrNull()
         if (contraction != null && !forgottenWords.contains(normalizeLearnedWord(contraction))) {
-            ic.deleteSurroundingText(word.length, 0)
-            ic.commitText(matchCase(word, contraction), 1)
+            applyAutoCorrectionReplacement(ic, word, contraction)
             return
         }
         if (wordFreq.containsKey(lower) || learnedFreq.containsKey(lower)) return
         val replacement = learnedCorrectionSuggestions(lower).firstOrNull() ?: bestCorrections(lower, maxDistance = if (lower.length <= 4) 1 else 2).firstOrNull() ?: autoCorrect[lower] ?: return
-        if (replacement != lower) {
-            ic.deleteSurroundingText(word.length, 0)
-            ic.commitText(matchCase(word, replacement), 1)
-        }
+        if (normalizeLearnedWord(replacement) != lower) applyAutoCorrectionReplacement(ic, word, replacement)
+    }
+
+    private fun applyAutoCorrectionReplacement(ic: InputConnection, original: String, replacement: String) {
+        ic.deleteSurroundingText(original.length, 0)
+        val cased = matchCase(original, replacement)
+        ic.commitText(cased, 1)
+        lastAutoCorrection = AutoCorrectionUndo(original = original, replacement = cased, appliedAtMs = System.currentTimeMillis())
+    }
+
+    private fun undoRecentAutoCorrectionIfTargetedDelete(): Boolean {
+        val undo = lastAutoCorrection ?: return false
+        if (System.currentTimeMillis() - undo.appliedAtMs > 15_000L) return false
+        val ic = currentInputConnection ?: return false
+        val before = ic.getTextBeforeCursor(120, 0)?.toString().orEmpty()
+        val trimmed = before.trimEnd()
+        val trailingSpaces = before.length - trimmed.length
+        if (!trimmed.endsWith(undo.replacement)) return false
+        markOwnInputEdit()
+        ic.deleteSurroundingText(trailingSpaces + undo.replacement.length, 0)
+        ic.commitText(undo.original, 1)
+        pausedAutoCorrectWord = normalizeLearnedWord(undo.original)
+        lastAutoCorrection = null
+        pendingNextWordContext = null
+        voiceStatusText = "Autocorrect paused: ${undo.original}"
+        refreshSuggestionsNow()
+        return true
     }
 
     private fun scheduleSuggestionsRefresh(delayMs: Long = suggestionRefreshDelayMs) {
@@ -2689,27 +2741,43 @@ Dee Keyboard full feature guide
     }
 
     private fun refreshSuggestionsNow() {
+        val startedAt = System.nanoTime()
         if (!::suggestionCenter.isInitialized || !suggestionModeEnabled) {
             if (::suggestionCenter.isInitialized) setSuggestionTexts(emptyList())
             return
         }
         if (keyboardLanguageMode == "pinyin" || keyboardLanguageMode == "jiufang" || keyboardLanguageMode == "sucheng") {
             refreshChineseSuggestions()
+            logSlowSuggestionRefresh("zh", startedAt)
             return
         }
         val word = currentWord().lowercase()
         if (word.isBlank()) {
             setSuggestionTexts(pendingNextWordContext?.let { nextWordSuggestionsForContext(it) }.orEmpty())
+            logSlowSuggestionRefresh("next", startedAt)
             return
         }
         pendingNextWordContext = null
+        val generationStartedAt = System.nanoTime()
+        if (pausedAutoCorrectWord == word) {
+            setSuggestionTexts(bestCorrections(word, maxDistance = if (word.length <= 4) 2 else 3).take(3))
+            logSlowSuggestionRefresh("paused:${word.length}", startedAt)
+            return
+        }
         val global = globalSuggestions(word)
         val suggestions = if ((wordFreq.containsKey(word) || learnedFreq.containsKey(word)) && global.isEmpty()) {
             (listOf(word) + learnedCorrectionSuggestions(word) + specialSuggestions[word].orEmpty() + prefixSuggestions(word).filter { it != word }).distinct().filterNotForgotten().take(3)
         } else {
             (global + learnedCorrectionSuggestions(word) + specialSuggestions[word].orEmpty() + bestCorrections(word, maxDistance = if (word.length <= 4) 2 else 3) + prefixSuggestions(word)).distinct().filterNotForgotten().take(3)
         }
+        val generationMs = (System.nanoTime() - generationStartedAt) / 1_000_000L
         setSuggestionTexts(suggestions)
+        logSlowSuggestionRefresh("en:${word.length}:gen=${generationMs}ms", startedAt)
+    }
+
+    private fun logSlowSuggestionRefresh(label: String, startedAt: Long) {
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+        if (elapsedMs >= 80L) Log.d("QwenKeyboard", "Slow suggestions $label total=${elapsedMs}ms")
     }
 
     private fun refreshChineseSuggestions() {
@@ -2729,6 +2797,9 @@ Dee Keyboard full feature guide
         val right = words.getOrNull(2) ?: ""
         fun bind(button: Button, word: String) {
             button.text = word
+            button.textSize = suggestionTextSizeFor(word)
+            button.setSingleLine(true)
+            button.ellipsize = TextUtils.TruncateAt.END
             button.setOnClickListener {
                 if (word.isBlank() || word == chineseModeLabel()) toggleChineseKeyboardMode() else commitChineseCandidate(word)
             }
@@ -2856,6 +2927,9 @@ Dee Keyboard full feature guide
         val right = words.getOrNull(2) ?: ""
         fun bind(button: Button, word: String) {
             button.text = word
+            button.textSize = suggestionTextSizeFor(word)
+            button.setSingleLine(true)
+            button.ellipsize = TextUtils.TruncateAt.END
             button.setOnClickListener { if (word.isNotBlank()) replaceCurrentWord(word) }
             button.setOnLongClickListener {
                 if (word.isNotBlank()) requestForgetConfirmation(word)
@@ -2865,6 +2939,13 @@ Dee Keyboard full feature guide
         bind(suggestionLeft, left)
         bind(suggestionCenter, center)
         bind(suggestionRight, right)
+    }
+
+    private fun suggestionTextSizeFor(word: String): Float = when {
+        word.length > 18 -> 10.5f
+        word.length > 14 -> 11.5f
+        word.length > 10 -> 12.5f
+        else -> 18f
     }
 
     private fun requestForgetConfirmation(word: String) {
@@ -2909,6 +2990,8 @@ Dee Keyboard full feature guide
         ic.commitText(matchCase(current, word) + " ", 1)
         learnWord(word)
         learnCorrection(current, word)
+        pausedAutoCorrectWord = null
+        lastAutoCorrection = null
         pendingNextWordContext = listOf(selectedLower)
         // Suggestion selection already adds one space. Keep double-space logic waiting
         // for two explicit spacebar taps after this, rather than firing on the next tap.
@@ -3262,6 +3345,7 @@ Dee Keyboard full feature guide
 
     private fun deleteOneCharRememberingWord() {
         if (deleteFromPreview()) return
+        if (undoRecentAutoCorrectionIfTargetedDelete()) return
         val ic = currentInputConnection ?: return
         if (deleteSelectedTextIfAny(ic)) return
         val word = normalizeLearnedWord(currentWord())
@@ -3283,6 +3367,7 @@ Dee Keyboard full feature guide
             previewAiFixedText = ""
             return
         }
+        if (undoRecentAutoCorrectionIfTargetedDelete()) return
         val ic = currentInputConnection ?: return
         if (deleteSelectedTextIfAny(ic)) return
         val before = ic.getTextBeforeCursor(80, 0)?.toString() ?: ""
@@ -3369,7 +3454,7 @@ Dee Keyboard full feature guide
         // VAD flushes on short pauses for faster perceived latency; overlap protects boundary words.
         // Short utterances like “how about” need lower VAD threshold/min speech and ASR padding in LiveChunkRecorder.
         val liveChunkMs = selectedChunkSec * 1000L
-        val liveOverlapMs = 500L
+        val liveOverlapMs = 200L
         recorder = LiveChunkRecorder(dir, queue, chunkMs = liveChunkMs, overlapMs = liveOverlapMs, vadEnabled = true).also { it.start() }
         worker = Thread({ transcribeLoop(queue) }, "qwen-ime-pc-asr").also { it.start() }
     }
@@ -4384,17 +4469,23 @@ Simplified output: 食咗饭未啊？听日去唔去街啊？跟住之后系咪�
         val oldWords = existing.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
         val newWords = incoming.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
         if (oldWords.isEmpty() || newWords.isEmpty()) return incoming
-        val maxOverlap = minOf(10, oldWords.size, newWords.size)
+        val maxOverlap = minOf(12, oldWords.size, newWords.size)
         for (n in maxOverlap downTo 1) {
             val oldTail = oldWords.takeLast(n).map { normalizedVoiceToken(it) }
             val newHead = newWords.take(n).map { normalizedVoiceToken(it) }
-            if (oldTail == newHead && oldTail.any { it.isNotBlank() }) {
+            val matchCount = oldTail.zip(newHead).count { (a, b) -> voiceTokensSimilar(a, b) }
+            val exact = oldTail == newHead
+            val fuzzyOk = n >= 2 && matchCount >= n - 1 && oldTail.any { it.isNotBlank() }
+            if ((exact || fuzzyOk) && oldTail.any { it.isNotBlank() }) {
+                val removed = newWords.take(n).joinToString(" ")
+                Log.d("QwenKeyboard", "Voice chunk de-dupe removed $n token(s): '$removed'")
                 return newWords.drop(n).joinToString(" ")
             }
         }
         // Also catch a short repeated filler after punctuation, e.g. previous ends
         // "... it is." and next starts "It is. Let's..." or "But. But let's...".
-        if (oldWords.lastOrNull()?.let { normalizedVoiceToken(it) == normalizedVoiceToken(newWords.first()) } == true) {
+        if (oldWords.lastOrNull()?.let { voiceTokensSimilar(normalizedVoiceToken(it), normalizedVoiceToken(newWords.first())) } == true) {
+            Log.d("QwenKeyboard", "Voice chunk de-dupe removed 1 token: '${newWords.first()}'")
             return newWords.drop(1).joinToString(" ")
         }
         return incoming
@@ -4403,6 +4494,14 @@ Simplified output: 食咗饭未啊？听日去唔去街啊？跟住之后系咪�
     private fun normalizedVoiceToken(token: String): String = token
         .lowercase()
         .trim { it.isWhitespace() || it in ".,?!:;，。？！：；\"'“”‘’()[]{}" }
+
+    private fun voiceTokensSimilar(a: String, b: String): Boolean {
+        if (a.isBlank() || b.isBlank()) return false
+        if (a == b) return true
+        if (a.length <= 2 || b.length <= 2) return false
+        if (kotlin.math.abs(a.length - b.length) > 1) return false
+        return editDistanceAtMost(a, b, 1) <= 1
+    }
 
     private val qwertyNeighbors = mapOf(
         'q' to "wa", 'w' to "qase", 'e' to "wsdr", 'r' to "edft", 't' to "rfgy", 'y' to "tghu", 'u' to "yhji", 'i' to "ujko", 'o' to "iklp", 'p' to "ol",
